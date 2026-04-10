@@ -17,7 +17,7 @@
 """add deleted_at for soft delete
 
 Revision ID: cb39f18af67f
-Revises: a1b2c3d4e5f6
+Revises: ce6bd21901ab
 Create Date: 2026-04-10 00:00:00.000000
 
 Adds a nullable ``deleted_at`` column and index to the ``slices``,
@@ -30,7 +30,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "cb39f18af67f"
-down_revision = "a1b2c3d4e5f6"
+down_revision = "ce6bd21901ab"
 
 TARGET_TABLES = ("slices", "dashboards", "tables")
 
