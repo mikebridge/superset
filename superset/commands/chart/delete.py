@@ -20,7 +20,7 @@ from typing import Optional
 
 from flask_babel import lazy_gettext as _
 
-from superset import db, security_manager
+from superset import security_manager
 from superset.commands.base import BaseCommand
 from superset.commands.chart.exceptions import (
     ChartDeleteFailedError,
@@ -31,7 +31,6 @@ from superset.commands.chart.exceptions import (
 from superset.daos.chart import ChartDAO
 from superset.daos.report import ReportScheduleDAO
 from superset.exceptions import SupersetSecurityException
-from superset.models.dashboard import dashboard_slices
 from superset.models.slice import Slice
 from superset.utils.decorators import on_error, transaction
 
@@ -48,16 +47,19 @@ class DeleteChartCommand(BaseCommand):
         self.validate()
         assert self._models
 
-        # Hard-delete dashboard_slices junction rows for the charts being
-        # deleted (FR-011). With soft delete, ondelete=CASCADE no longer fires
-        # because the parent row isn't removed. Without this cleanup, dashboards
-        # show errors for missing charts.
-        chart_ids = [model.id for model in self._models]
-        db.session.execute(
-            dashboard_slices.delete().where(
-                dashboard_slices.c.slice_id.in_(chart_ids)
-            )
-        )
+        # TODO(sc-103157): Decide whether to hard-delete dashboard_slices
+        # junction rows on chart soft-delete (FR-011). With soft delete,
+        # ondelete=CASCADE no longer fires because the parent row isn't
+        # removed. The MissingChart frontend component handles orphaned
+        # position_json references gracefully (same as hard delete).
+        # Uncomment the following to clean up junction rows:
+        #
+        # chart_ids = [model.id for model in self._models]
+        # db.session.execute(
+        #     dashboard_slices.delete().where(
+        #         dashboard_slices.c.slice_id.in_(chart_ids)
+        #     )
+        # )
 
         ChartDAO.delete(self._models)
 
