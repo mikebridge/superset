@@ -99,7 +99,9 @@ class TestDatasetSoftDelete(SupersetTestCase):
         for chart_id in dependent_chart_ids:
             chart = db.session.query(Slice).filter(Slice.id == chart_id).one_or_none()
             assert chart is not None, f"Chart {chart_id} should still be active"
-            assert chart.deleted_at is None, f"Chart {chart_id} should not be soft-deleted"
+            assert chart.deleted_at is None, (
+                f"Chart {chart_id} should not be soft-deleted"
+            )
 
         # Cleanup
         row = (

@@ -58,7 +58,7 @@ from sqlalchemy import and_, Column, or_, UniqueConstraint
 from sqlalchemy.exc import MultipleResultsFound
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.orm import Mapper, Session, validates, with_loader_criteria
+from sqlalchemy.orm import Mapper, validates, with_loader_criteria
 from sqlalchemy.sql.elements import ColumnElement, Grouping, literal_column, TextClause
 from sqlalchemy.sql.expression import Label, Select, TextAsFrom
 from sqlalchemy.sql.selectable import Alias, TableClause

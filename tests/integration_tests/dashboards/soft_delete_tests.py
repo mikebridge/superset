@@ -137,6 +137,8 @@ class TestDashboardRestore(SupersetTestCase):
         assert rv.status_code == 200
 
         # Chart association is preserved
-        restored = db.session.query(Dashboard).filter(Dashboard.id == dashboard_id).one()
+        restored = (
+            db.session.query(Dashboard).filter(Dashboard.id == dashboard_id).one()
+        )
         chart_ids = [s.id for s in restored.slices]
         assert chart_id in chart_ids

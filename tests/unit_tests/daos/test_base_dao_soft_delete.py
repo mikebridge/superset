@@ -20,10 +20,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from superset.models.helpers import SoftDeleteMixin
-
 
 def test_delete_routes_to_soft_delete_for_mixin_models(
     app_context: None,

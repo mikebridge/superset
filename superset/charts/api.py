@@ -57,7 +57,6 @@ from superset.charts.schemas import (
 )
 from superset.commands.chart.create import CreateChartCommand
 from superset.commands.chart.delete import DeleteChartCommand
-from superset.commands.chart.restore import RestoreChartCommand
 from superset.commands.chart.exceptions import (
     ChartCreateFailedError,
     ChartDeleteFailedError,
@@ -71,6 +70,7 @@ from superset.commands.chart.exceptions import (
 from superset.commands.chart.export import ExportChartsCommand
 from superset.commands.chart.fave import AddFavoriteChartCommand
 from superset.commands.chart.importers.dispatcher import ImportChartsCommand
+from superset.commands.chart.restore import RestoreChartCommand
 from superset.commands.chart.unfave import DelFavoriteChartCommand
 from superset.commands.chart.update import UpdateChartCommand
 from superset.commands.chart.warm_up_cache import ChartWarmUpCacheCommand
@@ -632,8 +632,9 @@ class ChartRestApi(BaseSupersetModelRestApi):
     @safe
     @statsd_metrics
     @event_logger.log_this_with_context(
-        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}"
-        f".cache_screenshot",
+        action=lambda self, *args, **kwargs: (
+            f"{self.__class__.__name__}.cache_screenshot"
+        ),
         log_to_statsd=False,
     )
     def cache_screenshot(self, pk: int, **kwargs: Any) -> WerkzeugResponse:
@@ -934,8 +935,9 @@ class ChartRestApi(BaseSupersetModelRestApi):
     @rison(get_fav_star_ids_schema)
     @statsd_metrics
     @event_logger.log_this_with_context(
-        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}"
-        f".favorite_status",
+        action=lambda self, *args, **kwargs: (
+            f"{self.__class__.__name__}.favorite_status"
+        ),
         log_to_statsd=False,
     )
     def favorite_status(self, **kwargs: Any) -> Response:
@@ -1026,8 +1028,9 @@ class ChartRestApi(BaseSupersetModelRestApi):
     @safe
     @statsd_metrics
     @event_logger.log_this_with_context(
-        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}"
-        f".remove_favorite",
+        action=lambda self, *args, **kwargs: (
+            f"{self.__class__.__name__}.remove_favorite"
+        ),
         log_to_statsd=False,
     )
     def remove_favorite(self, pk: int) -> Response:
