@@ -740,7 +740,6 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         self.configure_feature_flags()
         self.configure_db_encrypt()
         self.setup_db()
-        self.setup_soft_delete_listener()
 
         # Check database connection and warn if unavailable
         self.check_and_warn_database_connection()
@@ -759,6 +758,7 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         with self.superset_app.app_context():
             self.init_app_in_ctx()
 
+        self.setup_soft_delete_listener()
         self.post_init()
 
     def set_db_default_isolation(self) -> None:

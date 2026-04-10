@@ -471,7 +471,7 @@ class BaseDAO(CoreBaseDAO[T], Generic[T]):
         """
         from superset.models.helpers import SoftDeleteMixin
 
-        if issubclass(cls.model_cls, SoftDeleteMixin):
+        if cls.model_cls is not None and issubclass(cls.model_cls, SoftDeleteMixin):
             cls.soft_delete(items)
         else:
             cls.hard_delete(items)
