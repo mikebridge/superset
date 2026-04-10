@@ -16,7 +16,7 @@
 # under the License.
 """Integration tests for dataset soft-delete and restore (sc-103157)."""
 
-import json
+from superset.utils import json
 
 from superset.connectors.sqla.models import SqlaTable
 from superset.extensions import db

@@ -16,7 +16,7 @@
 # under the License.
 """Integration tests for dashboard soft-delete and restore (sc-103157)."""
 
-import json
+from superset.utils import json
 
 from superset.extensions import db
 from superset.models.dashboard import Dashboard

@@ -16,7 +16,7 @@
 # under the License.
 """Integration tests for chart soft-delete and restore (sc-103157)."""
 
-import json
+from superset.utils import json
 
 from superset.extensions import db
 from superset.models.helpers import SKIP_VISIBILITY_FILTER
@@ -30,7 +30,7 @@ class TestChartSoftDelete(InsertChartMixin, SupersetTestCase):
     """Tests for chart soft-delete behaviour (T013, T016)."""
 
     def test_delete_chart_soft_deletes(self):
-        """DELETE /api/v1/chart/<pk> should set deleted_at instead of removing the row."""
+        """DELETE /api/v1/chart/<pk> sets deleted_at instead of removing the row."""
         admin_id = self.get_user("admin").id
         chart = self.insert_chart("soft_delete_test", [admin_id], 1)
         chart_id = chart.id
