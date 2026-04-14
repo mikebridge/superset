@@ -257,6 +257,29 @@ class VersionDAO:
                 # Expire the relationship so ORM doesn't hold stale refs
                 db.session.expire(entity, [rel_name])
 
-                # Revert each child version (creates new ORM objects)
+                # Recreate children from version data via direct SQL
+                # (bypasses ORM/Continuum to avoid autoflush conflicts)
+                continuum_cols = {
+                    "transaction_id",
+                    "end_transaction_id",
+                    "operation_type",
+                }
                 for child_version in children_at_txn:
-                    child_version.revert(relations=[])
+                    values = {}
+                    for col in child_version_cls.__table__.columns:
+                        if col.name in continuum_cols:
+                            continue
+                        if col.name in RESTORE_EXCLUDE_FIELDS:
+                            continue
+                        if col.name == "id":
+                            continue
+                        try:
+                            values[col.name] = getattr(
+                                child_version, col.name
+                            )
+                        except AttributeError:
+                            pass
+                    values[fk_column] = entity.id
+                    db.session.execute(
+                        child_table.insert().values(**values)
+                    )
