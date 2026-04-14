@@ -252,11 +252,13 @@ class VersionDAO:
                 # no children. Leave current children unchanged.
                 continue
 
-            # Delete current children
+            # Delete current children and flush before inserting to avoid
+            # unique constraint violations from autoflush
             fk_col = getattr(child_cls, fk_column)
             db.session.query(child_cls).filter(fk_col == entity_id).delete(
-                synchronize_session=False
+                synchronize_session="fetch"
             )
+            db.session.flush()
 
             # Recreate from version data
             continuum_cols = {
