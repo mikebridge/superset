@@ -56,10 +56,21 @@ from superset.commands.dataset.warm_up_cache import DatasetWarmUpCacheCommand
 from superset.commands.exceptions import CommandException
 from superset.commands.importers.exceptions import NoValidFilesFoundError
 from superset.commands.importers.v1.utils import get_contents_from_bundle
+from superset.commands.version.exceptions import (
+    VersionForbiddenError,
+    VersionNotFoundError,
+    VersionRestoreFailedError,
+)
+from superset.commands.version.restore import RestoreVersionCommand
+from superset.commands.version.schemas import (
+    VersionDetailResponseSchema,
+    VersionListResponseSchema,
+)
 from superset.connectors.sqla.models import SqlaTable
 from superset.constants import MODEL_API_RW_METHOD_PERMISSION_MAP, RouteMethod
 from superset.daos.dashboard import DashboardDAO
 from superset.daos.dataset import DatasetDAO
+from superset.daos.version import VersionDAO
 from superset.databases.filters import DatabaseFilter
 from superset.datasets.filters import DatasetCertifiedFilter, DatasetIsNullOrEmptyFilter
 from superset.datasets.schemas import (
@@ -117,6 +128,9 @@ class DatasetRestApi(BaseSupersetModelRestApi):
         "get_or_create_dataset",
         "warm_up_cache",
         "get_drill_info",
+        "get_versions",
+        "get_version",
+        "restore_version",
     }
     list_columns = [
         "id",
@@ -712,8 +726,9 @@ class DatasetRestApi(BaseSupersetModelRestApi):
     @safe
     @statsd_metrics
     @event_logger.log_this_with_context(
-        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}"
-        ".detect_datetime_formats",
+        action=lambda self, *args, **kwargs: (
+            f"{self.__class__.__name__}.detect_datetime_formats"
+        ),
         log_to_statsd=False,
     )
     def detect_datetime_formats(self, pk: int) -> Response:
@@ -794,8 +809,9 @@ class DatasetRestApi(BaseSupersetModelRestApi):
     @safe
     @statsd_metrics
     @event_logger.log_this_with_context(
-        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}"
-        f".related_objects",
+        action=lambda self, *args, **kwargs: (
+            f"{self.__class__.__name__}.related_objects"
+        ),
         log_to_statsd=False,
     )
     def related_objects(self, id_or_uuid: str) -> Response:
@@ -1051,8 +1067,9 @@ class DatasetRestApi(BaseSupersetModelRestApi):
     @safe
     @statsd_metrics
     @event_logger.log_this_with_context(
-        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}"
-        f".get_or_create_dataset",
+        action=lambda self, *args, **kwargs: (
+            f"{self.__class__.__name__}.get_or_create_dataset"
+        ),
         log_to_statsd=False,
     )
     def get_or_create_dataset(self) -> Response:
@@ -1272,9 +1289,9 @@ class DatasetRestApi(BaseSupersetModelRestApi):
     @safe
     @statsd_metrics
     @event_logger.log_this_with_context(
-        action=lambda self,
-        *args,
-        **kwargs: f"{self.__class__.__name__}.get_drill_info",
+        action=lambda self, *args, **kwargs: (
+            f"{self.__class__.__name__}.get_drill_info"
+        ),
         log_to_statsd=False,
     )
     def get_drill_info(self, pk: int, **kwargs: Any) -> Response:
@@ -1409,3 +1426,148 @@ class DatasetRestApi(BaseSupersetModelRestApi):
                 raise template_exception from ex
 
         return data
+
+    @expose("/<pk>/versions/", methods=("GET",))
+    @protect()
+    @safe
+    @statsd_metrics
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.get_versions",
+        log_to_statsd=False,
+    )
+    def get_versions(self, pk: int) -> Response:
+        """List version history for a dataset.
+        ---
+        get:
+          summary: List version history for a dataset
+          parameters:
+          - in: path
+            schema:
+              type: integer
+            name: pk
+          - in: query
+            name: page
+            schema:
+              type: integer
+          - in: query
+            name: page_size
+            schema:
+              type: integer
+          responses:
+            200:
+              description: Version history
+              content:
+                application/json:
+                  schema:
+                    $ref: '#/components/schemas/VersionListResponseSchema'
+            401:
+              $ref: '#/components/responses/401'
+            403:
+              $ref: '#/components/responses/403'
+            404:
+              $ref: '#/components/responses/404'
+        """
+        if not is_feature_enabled("VERSION_HISTORY_ENABLED"):
+            return self.response_404()
+        page = request.args.get("page", 0, type=int)
+        page_size = request.args.get("page_size", 25, type=int)
+        result = VersionDAO.list_versions(SqlaTable, pk, page, page_size)
+        return self.response(200, **VersionListResponseSchema().dump(result))
+
+    @expose("/<pk>/versions/<int:version_number>", methods=("GET",))
+    @protect()
+    @safe
+    @statsd_metrics
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.get_version",
+        log_to_statsd=False,
+    )
+    def get_version(self, pk: int, version_number: int) -> Response:
+        """Get a single version snapshot for a dataset.
+        ---
+        get:
+          summary: Get a single version snapshot
+          parameters:
+          - in: path
+            schema:
+              type: integer
+            name: pk
+          - in: path
+            schema:
+              type: integer
+            name: version_number
+          responses:
+            200:
+              description: Version snapshot
+              content:
+                application/json:
+                  schema:
+                    $ref: '#/components/schemas/VersionDetailResponseSchema'
+            401:
+              $ref: '#/components/responses/401'
+            404:
+              $ref: '#/components/responses/404'
+        """
+        if not is_feature_enabled("VERSION_HISTORY_ENABLED"):
+            return self.response_404()
+        result = VersionDAO.get_version(SqlaTable, pk, version_number)
+        if result is None:
+            return self.response_404()
+        return self.response(200, result=VersionDetailResponseSchema().dump(result))
+
+    @expose("/<pk>/versions/<int:version_number>/restore", methods=("POST",))
+    @protect()
+    @safe
+    @statsd_metrics
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: (
+            f"{self.__class__.__name__}.restore_version"
+        ),
+        log_to_statsd=False,
+    )
+    def restore_version(self, pk: int, version_number: int) -> Response:
+        """Restore a dataset to a previous version.
+        ---
+        post:
+          summary: Restore a dataset to a previous version
+          parameters:
+          - in: path
+            schema:
+              type: integer
+            name: pk
+          - in: path
+            schema:
+              type: integer
+            name: version_number
+          responses:
+            200:
+              description: Dataset restored
+              content:
+                application/json:
+                  schema:
+                    $ref: '#/components/schemas/VersionRestoreResponseSchema'
+            401:
+              $ref: '#/components/responses/401'
+            403:
+              $ref: '#/components/responses/403'
+            404:
+              $ref: '#/components/responses/404'
+            422:
+              $ref: '#/components/responses/422'
+        """
+        if not is_feature_enabled("VERSION_HISTORY_ENABLED"):
+            return self.response_404()
+        try:
+            RestoreVersionCommand(SqlaTable, pk, version_number).run()
+            return self.response(200, message=f"Restored from version {version_number}")
+        except VersionNotFoundError:
+            return self.response_404()
+        except VersionForbiddenError:
+            return self.response_403()
+        except VersionRestoreFailedError as ex:
+            logger.error(
+                "Error restoring dataset version: %s",
+                str(ex),
+                exc_info=True,
+            )
+            return self.response_422(message=str(ex))
