@@ -593,6 +593,9 @@ DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
     # Enables the tagging system for organizing assets
     # @lifecycle: development
     "TAGGING_SYSTEM": False,
+    # Enables version history for dashboards, charts, and datasets
+    # @lifecycle: development
+    "VERSION_HISTORY_ENABLED": True,
     # =================================================================
     # IN TESTING
     # =================================================================
@@ -1370,6 +1373,16 @@ CELERY_BEAT_SCHEDULER_EXPIRES = timedelta(weeks=1)
 # Default celery config is to use SQLA as a broker, in a production setting
 # you'll want to use a proper broker as specified here:
 # https://docs.celeryq.dev/en/stable/getting-started/backends-and-brokers/index.html
+
+# ---------------------------------------------------
+# Version History
+# ---------------------------------------------------
+# Maximum number of version snapshots retained per entity.
+# When exceeded, the oldest versions are pruned by a Celery periodic task.
+VERSION_HISTORY_MAX_VERSIONS = 20
+
+# Number of entities to process per batch during version pruning.
+VERSION_PRUNE_BATCH_SIZE = 100
 
 
 class CeleryConfig:  # pylint: disable=too-few-public-methods
