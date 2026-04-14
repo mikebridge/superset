@@ -241,21 +241,18 @@ class VersionDAO:
                 fk_column = list(prop.local_remote_pairs)[0][1].name
 
                 # Find child versions active at target transaction.
-                # Deduplicate by child id — take only the latest
-                # transaction_id per child to avoid inserting
-                # duplicates from overlapping validity ranges.
+                # override_columns saves delete+re-insert children
+                # with new IDs, so the same column_name can appear
+                # under multiple IDs with overlapping validity.
+                # Deduplicate by keeping only the row with the highest
+                # (id, transaction_id) per result set.
                 from sqlalchemy import func
 
                 fk_version_col = getattr(child_version_cls, fk_column)
 
-                # Subquery: max transaction_id per child id
-                latest_txn = (
-                    db.session.query(
-                        child_version_cls.id,
-                        func.max(child_version_cls.transaction_id).label(
-                            "max_txn"
-                        ),
-                    )
+                # Get all active child versions at target txn
+                active_versions = (
+                    db.session.query(child_version_cls)
                     .filter(
                         fk_version_col == entity.id,
                         child_version_cls.transaction_id <= target_txn,
@@ -265,22 +262,27 @@ class VersionDAO:
                             > target_txn,
                         ),
                     )
-                    .group_by(child_version_cls.id)
-                    .subquery()
-                )
-
-                children_at_txn = (
-                    db.session.query(child_version_cls)
-                    .join(
-                        latest_txn,
-                        (child_version_cls.id == latest_txn.c.id)
-                        & (
-                            child_version_cls.transaction_id
-                            == latest_txn.c.max_txn
-                        ),
+                    .order_by(
+                        child_version_cls.id.desc(),
+                        child_version_cls.transaction_id.desc(),
                     )
                     .all()
                 )
+
+                # Deduplicate: for columns use column_name, for
+                # metrics use metric_name. Fall back to keeping all.
+                seen = set()
+                children_at_txn = []
+                for v in active_versions:
+                    # Try common natural key fields
+                    key = (
+                        getattr(v, "column_name", None)
+                        or getattr(v, "metric_name", None)
+                        or v.id
+                    )
+                    if key not in seen:
+                        seen.add(key)
+                        children_at_txn.append(v)
 
                 if not children_at_txn:
                     continue
