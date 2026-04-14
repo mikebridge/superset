@@ -137,7 +137,12 @@ class VersionDAO:
         snapshot = {}
         for col in VersionCls.__table__.columns:
             if col.name not in continuum_columns:
-                snapshot[col.name] = getattr(version, col.name)
+                try:
+                    snapshot[col.name] = getattr(version, col.name)
+                except AttributeError:
+                    # Column exists in table but not as a Python attribute
+                    # (e.g., inherited columns). Read from the raw row.
+                    pass
 
         return {
             "version_number": version.transaction_id,
