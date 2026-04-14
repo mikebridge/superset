@@ -22,6 +22,7 @@ import logging
 from typing import Any
 
 from flask_appbuilder import Model
+from sqlalchemy import or_
 from sqlalchemy_continuum import transaction_class, version_class
 
 from superset import db
@@ -48,6 +49,25 @@ OPERATION_TYPE_MAP = {
 }
 
 
+# Map of parent model → list of (child_model, FK column name on the child)
+# for models whose children should be restored alongside the parent.
+VERSIONED_CHILDREN: dict[str, list[tuple[str, str]]] = {
+    "SqlaTable": [
+        ("superset.connectors.sqla.models.TableColumn", "table_id"),
+        ("superset.connectors.sqla.models.SqlMetric", "table_id"),
+    ],
+}
+
+
+def _import_class(dotted_path: str) -> type:
+    """Import a class from a dotted module path."""
+    module_path, class_name = dotted_path.rsplit(".", 1)
+    import importlib
+
+    module = importlib.import_module(module_path)
+    return getattr(module, class_name)
+
+
 class VersionDAO:
     """Data access layer for entity version history."""
 
@@ -66,16 +86,12 @@ class VersionDAO:
         VersionCls = version_class(model_cls)  # noqa: N806
         TransactionCls = transaction_class(model_cls)  # noqa: N806
 
-        base_query = (
-            db.session.query(VersionCls)
-            .filter(VersionCls.id == entity_id)
-        )
+        base_query = db.session.query(VersionCls).filter(VersionCls.id == entity_id)
 
         total = base_query.count()
 
         versions = (
-            base_query
-            .order_by(VersionCls.transaction_id.desc())
+            base_query.order_by(VersionCls.transaction_id.desc())
             .offset(page * page_size)
             .limit(page_size)
             .all()
@@ -150,9 +166,7 @@ class VersionDAO:
             "changed_by_fk": version.changed_by_fk
             if hasattr(version, "changed_by_fk")
             else None,
-            "operation_type": OPERATION_TYPE_MAP.get(
-                version.operation_type, "unknown"
-            ),
+            "operation_type": OPERATION_TYPE_MAP.get(version.operation_type, "unknown"),
             "snapshot": snapshot,
         }
 
@@ -166,12 +180,13 @@ class VersionDAO:
 
         Applies the snapshot columns (excluding audit fields) as a normal
         UPDATE so Continuum captures the restore as a new version.
+        For models with versioned children (e.g., SqlaTable → TableColumn,
+        SqlMetric), also restores children to their state at the target
+        transaction using Continuum's validity range.
         Returns the restored entity, or ``None`` if the version or entity
         does not exist.
         """
-        version_data = VersionDAO.get_version(
-            model_cls, entity_id, version_number
-        )
+        version_data = VersionDAO.get_version(model_cls, entity_id, version_number)
         if version_data is None:
             return None
 
@@ -190,4 +205,78 @@ class VersionDAO:
             if hasattr(entity, field):
                 setattr(entity, field, value)
 
+        # Restore versioned children if configured
+        VersionDAO._restore_children(model_cls, entity_id, version_number)
+
         return entity
+
+    @staticmethod
+    def _restore_children(
+        model_cls: type[Model],
+        entity_id: int,
+        target_txn: int,
+    ) -> None:
+        """Restore child entities to their state at the target transaction.
+
+        Uses Continuum's validity range: a child version was active at
+        ``target_txn`` if ``transaction_id <= target_txn`` and
+        ``(end_transaction_id IS NULL OR end_transaction_id > target_txn)``.
+        """
+        class_name = model_cls.__name__
+        children_config = VERSIONED_CHILDREN.get(class_name)
+        if not children_config:
+            return
+
+        for child_path, fk_column in children_config:
+            child_cls = _import_class(child_path)
+            child_version_cls = version_class(child_cls)
+
+            # Find child versions active at the target transaction
+            fk_version_col = getattr(child_version_cls, fk_column)
+            children_at_txn = (
+                db.session.query(child_version_cls)
+                .filter(
+                    fk_version_col == entity_id,
+                    child_version_cls.transaction_id <= target_txn,
+                    or_(
+                        child_version_cls.end_transaction_id.is_(None),
+                        child_version_cls.end_transaction_id > target_txn,
+                    ),
+                )
+                .all()
+            )
+
+            if not children_at_txn:
+                # No child versions at this transaction — either the
+                # version predates child versioning or the entity had
+                # no children. Leave current children unchanged.
+                continue
+
+            # Delete current children
+            fk_col = getattr(child_cls, fk_column)
+            db.session.query(child_cls).filter(fk_col == entity_id).delete(
+                synchronize_session=False
+            )
+
+            # Recreate from version data
+            continuum_cols = {
+                "transaction_id",
+                "end_transaction_id",
+                "operation_type",
+            }
+            for child_version in children_at_txn:
+                child = child_cls()
+                for col in child_version_cls.__table__.columns:
+                    if col.name in continuum_cols:
+                        continue
+                    if col.name in RESTORE_EXCLUDE_FIELDS:
+                        continue
+                    if col.name == "id":
+                        continue
+                    try:
+                        value = getattr(child_version, col.name)
+                        setattr(child, col.name, value)
+                    except AttributeError:
+                        pass
+                setattr(child, fk_column, entity_id)
+                db.session.add(child)

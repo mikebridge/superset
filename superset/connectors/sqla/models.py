@@ -848,6 +848,7 @@ class TableColumn(AuditMixinNullable, ImportExportMixin, CertificationMixin, Mod
     """ORM object for table columns, each table can have multiple columns"""
 
     __tablename__ = "table_columns"
+    __versioned__ = {}
     __table_args__ = (UniqueConstraint("table_id", "column_name"),)
 
     id = Column(Integer, primary_key=True)
@@ -1093,6 +1094,7 @@ class SqlMetric(AuditMixinNullable, ImportExportMixin, CertificationMixin, Model
     """ORM object for metrics, each table can have multiple metrics"""
 
     __tablename__ = "sql_metrics"
+    __versioned__ = {}
     __table_args__ = (UniqueConstraint("table_id", "metric_name"),)
 
     id = Column(Integer, primary_key=True)
