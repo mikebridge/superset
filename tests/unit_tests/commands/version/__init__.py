@@ -14,25 +14,3 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Exceptions for version history commands."""
-
-from superset.commands.exceptions import (
-    CommandException,
-    ForbiddenError,
-    ObjectNotFoundError,
-)
-
-
-class VersionNotFoundError(ObjectNotFoundError):
-    message = "Version not found"
-
-    def __init__(self, exception: Exception | None = None) -> None:
-        super().__init__("Version", exception=exception)
-
-
-class VersionRestoreFailedError(CommandException):
-    message = "Failed to restore version"
-
-
-class VersionForbiddenError(ForbiddenError):
-    message = "Insufficient permissions to access version history"
