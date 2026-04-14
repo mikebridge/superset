@@ -358,6 +358,7 @@ def upgrade():
             autoincrement=False,
             nullable=True,
         ),
+        sa.Column("folders", sa.JSON(), autoincrement=False, nullable=True),
         sa.Column("created_by_fk", sa.Integer(), autoincrement=False, nullable=True),
         sa.Column("changed_by_fk", sa.Integer(), autoincrement=False, nullable=True),
         sa.Column(
