@@ -229,16 +229,43 @@ class VersionDAO:
                 # Determine FK column name from the relationship
                 fk_column = list(prop.local_remote_pairs)[0][1].name
 
-                # Find child versions active at target transaction
+                # Find child versions active at target transaction.
+                # Deduplicate by child id — take only the latest
+                # transaction_id per child to avoid inserting
+                # duplicates from overlapping validity ranges.
+                from sqlalchemy import func
+
                 fk_version_col = getattr(child_version_cls, fk_column)
-                children_at_txn = (
-                    db.session.query(child_version_cls)
+
+                # Subquery: max transaction_id per child id
+                latest_txn = (
+                    db.session.query(
+                        child_version_cls.id,
+                        func.max(child_version_cls.transaction_id).label(
+                            "max_txn"
+                        ),
+                    )
                     .filter(
                         fk_version_col == entity.id,
                         child_version_cls.transaction_id <= target_txn,
                         or_(
                             child_version_cls.end_transaction_id.is_(None),
-                            child_version_cls.end_transaction_id > target_txn,
+                            child_version_cls.end_transaction_id
+                            > target_txn,
+                        ),
+                    )
+                    .group_by(child_version_cls.id)
+                    .subquery()
+                )
+
+                children_at_txn = (
+                    db.session.query(child_version_cls)
+                    .join(
+                        latest_txn,
+                        (child_version_cls.id == latest_txn.c.id)
+                        & (
+                            child_version_cls.transaction_id
+                            == latest_txn.c.max_txn
                         ),
                     )
                     .all()
