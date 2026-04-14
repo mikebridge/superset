@@ -390,34 +390,37 @@ def upgrade():
     )
 
     # --- Junction table version tables (auto-tracked by Continuum) ---
+    # Note: id is nullable because Continuum may not include it when
+    # versioning association table changes. PK is (id, transaction_id)
+    # but id defaults to 0 when not provided.
     _JUNCTION_TABLES = {
         "dashboard_roles_version": [
-            sa.Column("id", sa.Integer(), autoincrement=False, nullable=False),
-            sa.Column("dashboard_id", sa.Integer(), autoincrement=False, nullable=False),
-            sa.Column("role_id", sa.Integer(), autoincrement=False, nullable=False),
+            sa.Column("id", sa.Integer(), autoincrement=False, nullable=True, server_default="0"),
+            sa.Column("dashboard_id", sa.Integer(), autoincrement=False, nullable=True),
+            sa.Column("role_id", sa.Integer(), autoincrement=False, nullable=True),
         ],
         "dashboard_slices_version": [
-            sa.Column("id", sa.Integer(), autoincrement=False, nullable=False),
+            sa.Column("id", sa.Integer(), autoincrement=False, nullable=True, server_default="0"),
             sa.Column("dashboard_id", sa.Integer(), autoincrement=False, nullable=True),
             sa.Column("slice_id", sa.Integer(), autoincrement=False, nullable=True),
         ],
         "dashboard_user_version": [
-            sa.Column("id", sa.Integer(), autoincrement=False, nullable=False),
+            sa.Column("id", sa.Integer(), autoincrement=False, nullable=True, server_default="0"),
             sa.Column("user_id", sa.Integer(), autoincrement=False, nullable=True),
             sa.Column("dashboard_id", sa.Integer(), autoincrement=False, nullable=True),
         ],
         "slice_user_version": [
-            sa.Column("id", sa.Integer(), autoincrement=False, nullable=False),
+            sa.Column("id", sa.Integer(), autoincrement=False, nullable=True, server_default="0"),
             sa.Column("user_id", sa.Integer(), autoincrement=False, nullable=True),
             sa.Column("slice_id", sa.Integer(), autoincrement=False, nullable=True),
         ],
         "sqlatable_user_version": [
-            sa.Column("id", sa.Integer(), autoincrement=False, nullable=False),
+            sa.Column("id", sa.Integer(), autoincrement=False, nullable=True, server_default="0"),
             sa.Column("user_id", sa.Integer(), autoincrement=False, nullable=True),
             sa.Column("table_id", sa.Integer(), autoincrement=False, nullable=True),
         ],
         "rls_filter_tables_version": [
-            sa.Column("id", sa.Integer(), autoincrement=False, nullable=False),
+            sa.Column("id", sa.Integer(), autoincrement=False, nullable=True, server_default="0"),
             sa.Column("table_id", sa.Integer(), autoincrement=False, nullable=True),
             sa.Column("rls_filter_id", sa.Integer(), autoincrement=False, nullable=True),
         ],
@@ -435,7 +438,7 @@ def upgrade():
             ),
             sa.Column("end_transaction_id", sa.BigInteger(), nullable=True),
             sa.Column("operation_type", sa.SmallInteger(), nullable=False),
-            sa.PrimaryKeyConstraint("id", "transaction_id"),
+            sa.PrimaryKeyConstraint("transaction_id"),
         )
         op.create_index(
             op.f(f"ix_{table_name}_end_transaction_id"),
