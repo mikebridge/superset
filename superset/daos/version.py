@@ -165,10 +165,11 @@ class VersionDAO:
     ) -> Model | None:
         """Restore an entity to a previous version.
 
-        Uses Continuum's built-in ``revert()`` method which handles both
-        the parent entity and any versioned child relationships (e.g.,
-        SqlaTable → columns, metrics). The revert creates a new version
-        in the history chain (non-destructive).
+        Uses Continuum's ``revert()`` for parent entity properties, then
+        manually replaces child entities (columns, metrics) by deleting
+        current children and reverting each child version. This is needed
+        because Continuum's Reverter inserts children without removing
+        existing ones, causing unique constraint violations.
 
         Returns the restored entity, or ``None`` if the version or entity
         does not exist.
@@ -187,15 +188,75 @@ class VersionDAO:
         if version_obj is None:
             return None
 
-        # Check entity still exists
         entity = db.session.query(model_cls).get(entity_id)
         if entity is None:
             return None
 
-        # Use Continuum's Reverter which handles parent + child relations
+        # Revert parent properties only (no relations)
+        version_obj.revert(relations=[])
+
+        # Restore children if configured
         relations = VERSIONED_CHILDREN_RELATIONS.get(
             model_cls.__name__, []
         )
-        version_obj.revert(relations=relations)
+        if relations:
+            VersionDAO._restore_children(entity, version_number, relations)
 
         return entity
+
+    @staticmethod
+    def _restore_children(
+        entity: Model,
+        target_txn: int,
+        relations: list[str],
+    ) -> None:
+        """Replace current children with their state at target_txn.
+
+        For each relationship, deletes all current children via direct
+        SQL (bypassing ORM cascades), then uses Continuum's revert on
+        each child version that was active at the target transaction.
+        """
+        from sqlalchemy import or_
+
+        mapper = entity.__class__.__mapper__
+
+        with db.session.no_autoflush:
+            for rel_name in relations:
+                prop = mapper.get_property(rel_name)
+                child_cls = prop.mapper.class_
+                child_version_cls = version_class(child_cls)
+
+                # Determine FK column name from the relationship
+                fk_column = list(prop.local_remote_pairs)[0][1].name
+
+                # Find child versions active at target transaction
+                fk_version_col = getattr(child_version_cls, fk_column)
+                children_at_txn = (
+                    db.session.query(child_version_cls)
+                    .filter(
+                        fk_version_col == entity.id,
+                        child_version_cls.transaction_id <= target_txn,
+                        or_(
+                            child_version_cls.end_transaction_id.is_(None),
+                            child_version_cls.end_transaction_id > target_txn,
+                        ),
+                    )
+                    .all()
+                )
+
+                if not children_at_txn:
+                    continue
+
+                # Delete current children via direct SQL
+                child_table = child_cls.__table__
+                db.session.execute(
+                    child_table.delete().where(
+                        child_table.c[fk_column] == entity.id
+                    )
+                )
+                # Expire the relationship so ORM doesn't hold stale refs
+                db.session.expire(entity, [rel_name])
+
+                # Revert each child version (creates new ORM objects)
+                for child_version in children_at_txn:
+                    child_version.revert(relations=[])
