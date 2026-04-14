@@ -227,58 +227,63 @@ class VersionDAO:
         if not children_config:
             return
 
-        for child_path, fk_column in children_config:
-            child_cls = _import_class(child_path)
-            child_version_cls = version_class(child_cls)
+        continuum_cols = {
+            "transaction_id",
+            "end_transaction_id",
+            "operation_type",
+        }
 
-            # Find child versions active at the target transaction
-            fk_version_col = getattr(child_version_cls, fk_column)
-            children_at_txn = (
-                db.session.query(child_version_cls)
-                .filter(
-                    fk_version_col == entity_id,
-                    child_version_cls.transaction_id <= target_txn,
-                    or_(
-                        child_version_cls.end_transaction_id.is_(None),
-                        child_version_cls.end_transaction_id > target_txn,
-                    ),
+        with db.session.no_autoflush:
+            for child_path, fk_column in children_config:
+                child_cls = _import_class(child_path)
+                child_version_cls = version_class(child_cls)
+
+                # Find child versions active at the target transaction
+                fk_version_col = getattr(child_version_cls, fk_column)
+                children_at_txn = (
+                    db.session.query(child_version_cls)
+                    .filter(
+                        fk_version_col == entity_id,
+                        child_version_cls.transaction_id <= target_txn,
+                        or_(
+                            child_version_cls.end_transaction_id.is_(None),
+                            child_version_cls.end_transaction_id > target_txn,
+                        ),
+                    )
+                    .all()
                 )
-                .all()
-            )
 
-            if not children_at_txn:
-                # No child versions at this transaction — either the
-                # version predates child versioning or the entity had
-                # no children. Leave current children unchanged.
-                continue
+                if not children_at_txn:
+                    # No child versions at this transaction — either
+                    # the version predates child versioning or the
+                    # entity had no children. Leave children unchanged.
+                    continue
 
-            # Delete current children and flush before inserting to avoid
-            # unique constraint violations from autoflush
-            fk_col = getattr(child_cls, fk_column)
-            db.session.query(child_cls).filter(fk_col == entity_id).delete(
-                synchronize_session="fetch"
-            )
-            db.session.flush()
+                # Delete current children via direct SQL to avoid
+                # triggering ORM cascade/autoflush issues
+                fk_col = getattr(child_cls, fk_column)
+                child_table = child_cls.__table__
+                db.session.execute(
+                    child_table.delete().where(
+                        child_table.c[fk_column] == entity_id
+                    )
+                )
 
-            # Recreate from version data
-            continuum_cols = {
-                "transaction_id",
-                "end_transaction_id",
-                "operation_type",
-            }
-            for child_version in children_at_txn:
-                child = child_cls()
-                for col in child_version_cls.__table__.columns:
-                    if col.name in continuum_cols:
-                        continue
-                    if col.name in RESTORE_EXCLUDE_FIELDS:
-                        continue
-                    if col.name == "id":
-                        continue
-                    try:
-                        value = getattr(child_version, col.name)
-                        setattr(child, col.name, value)
-                    except AttributeError:
-                        pass
-                setattr(child, fk_column, entity_id)
-                db.session.add(child)
+                # Recreate from version data
+                for child_version in children_at_txn:
+                    values = {}
+                    for col in child_version_cls.__table__.columns:
+                        if col.name in continuum_cols:
+                            continue
+                        if col.name in RESTORE_EXCLUDE_FIELDS:
+                            continue
+                        if col.name == "id":
+                            continue
+                        try:
+                            values[col.name] = getattr(
+                                child_version, col.name
+                            )
+                        except AttributeError:
+                            pass
+                    values[fk_column] = entity_id
+                    db.session.execute(child_table.insert().values(**values))
