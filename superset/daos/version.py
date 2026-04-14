@@ -271,10 +271,13 @@ class VersionDAO:
 
                 # Deduplicate: for columns use column_name, for
                 # metrics use metric_name. Fall back to keeping all.
+                # Skip DELETE operations (operation_type=2) — those
+                # represent children that were removed at that point.
                 seen = set()
                 children_at_txn = []
                 for v in active_versions:
-                    # Try common natural key fields
+                    if v.operation_type == 2:  # DELETE
+                        continue
                     key = (
                         getattr(v, "column_name", None)
                         or getattr(v, "metric_name", None)
