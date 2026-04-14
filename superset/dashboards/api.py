@@ -76,8 +76,19 @@ from superset.commands.database.exceptions import DatasetValidationError
 from superset.commands.exceptions import TagForbiddenError
 from superset.commands.importers.exceptions import NoValidFilesFoundError
 from superset.commands.importers.v1.utils import get_contents_from_bundle
+from superset.commands.version.exceptions import (
+    VersionForbiddenError,
+    VersionNotFoundError,
+    VersionRestoreFailedError,
+)
+from superset.commands.version.restore import RestoreVersionCommand
+from superset.commands.version.schemas import (
+    VersionDetailResponseSchema,
+    VersionListResponseSchema,
+)
 from superset.constants import MODEL_API_RW_METHOD_PERMISSION_MAP, RouteMethod
 from superset.daos.dashboard import DashboardDAO, EmbeddedDashboardDAO
+from superset.daos.version import VersionDAO
 from superset.dashboards.filters import (
     DashboardAccessFilter,
     DashboardCertifiedFilter,
@@ -246,6 +257,9 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
         "put_chart_customizations",
         "put_colors",
         "export_as_example",
+        "get_versions",
+        "get_version",
+        "restore_version",
     }
     resource_name = "dashboard"
     allow_browser_login = True
@@ -2199,3 +2213,148 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
                 ).timestamp(),
             },
         )
+
+    @expose("/<pk>/versions/", methods=("GET",))
+    @protect()
+    @safe
+    @statsd_metrics
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.get_versions",
+        log_to_statsd=False,
+    )
+    def get_versions(self, pk: int) -> Response:
+        """List version history for a dashboard.
+        ---
+        get:
+          summary: List version history for a dashboard
+          parameters:
+          - in: path
+            schema:
+              type: integer
+            name: pk
+          - in: query
+            name: page
+            schema:
+              type: integer
+          - in: query
+            name: page_size
+            schema:
+              type: integer
+          responses:
+            200:
+              description: Version history
+              content:
+                application/json:
+                  schema:
+                    $ref: '#/components/schemas/VersionListResponseSchema'
+            401:
+              $ref: '#/components/responses/401'
+            403:
+              $ref: '#/components/responses/403'
+            404:
+              $ref: '#/components/responses/404'
+        """
+        if not is_feature_enabled("VERSION_HISTORY_ENABLED"):
+            return self.response_404()
+        page = request.args.get("page", 0, type=int)
+        page_size = request.args.get("page_size", 25, type=int)
+        result = VersionDAO.list_versions(Dashboard, pk, page, page_size)
+        return self.response(200, **VersionListResponseSchema().dump(result))
+
+    @expose("/<pk>/versions/<int:version_number>", methods=("GET",))
+    @protect()
+    @safe
+    @statsd_metrics
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.get_version",
+        log_to_statsd=False,
+    )
+    def get_version(self, pk: int, version_number: int) -> Response:
+        """Get a single version snapshot for a dashboard.
+        ---
+        get:
+          summary: Get a single version snapshot
+          parameters:
+          - in: path
+            schema:
+              type: integer
+            name: pk
+          - in: path
+            schema:
+              type: integer
+            name: version_number
+          responses:
+            200:
+              description: Version snapshot
+              content:
+                application/json:
+                  schema:
+                    $ref: '#/components/schemas/VersionDetailResponseSchema'
+            401:
+              $ref: '#/components/responses/401'
+            404:
+              $ref: '#/components/responses/404'
+        """
+        if not is_feature_enabled("VERSION_HISTORY_ENABLED"):
+            return self.response_404()
+        result = VersionDAO.get_version(Dashboard, pk, version_number)
+        if result is None:
+            return self.response_404()
+        return self.response(200, result=VersionDetailResponseSchema().dump(result))
+
+    @expose("/<pk>/versions/<int:version_number>/restore", methods=("POST",))
+    @protect()
+    @safe
+    @statsd_metrics
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: (
+            f"{self.__class__.__name__}.restore_version"
+        ),
+        log_to_statsd=False,
+    )
+    def restore_version(self, pk: int, version_number: int) -> Response:
+        """Restore a dashboard to a previous version.
+        ---
+        post:
+          summary: Restore a dashboard to a previous version
+          parameters:
+          - in: path
+            schema:
+              type: integer
+            name: pk
+          - in: path
+            schema:
+              type: integer
+            name: version_number
+          responses:
+            200:
+              description: Dashboard restored
+              content:
+                application/json:
+                  schema:
+                    $ref: '#/components/schemas/VersionRestoreResponseSchema'
+            401:
+              $ref: '#/components/responses/401'
+            403:
+              $ref: '#/components/responses/403'
+            404:
+              $ref: '#/components/responses/404'
+            422:
+              $ref: '#/components/responses/422'
+        """
+        if not is_feature_enabled("VERSION_HISTORY_ENABLED"):
+            return self.response_404()
+        try:
+            RestoreVersionCommand(Dashboard, pk, version_number).run()
+            return self.response(200, message=f"Restored from version {version_number}")
+        except VersionNotFoundError:
+            return self.response_404()
+        except VersionForbiddenError:
+            return self.response_403()
+        except VersionRestoreFailedError as ex:
+            logger.error(
+                "Error restoring dashboard version: %s",
+                str(ex),
+                exc_info=True,
+            )
+            return self.response_422(message=str(ex))
