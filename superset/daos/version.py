@@ -192,15 +192,26 @@ class VersionDAO:
         if entity is None:
             return None
 
-        # Revert parent properties only (no relations)
-        version_obj.revert(relations=[])
-
-        # Restore children if configured
+        # Restore children first (if configured) via direct SQL
+        # before touching the parent — avoids cascade conflicts
         relations = VERSIONED_CHILDREN_RELATIONS.get(
             model_cls.__name__, []
         )
         if relations:
             VersionDAO._restore_children(entity, version_number, relations)
+
+        # Apply parent properties manually (skip audit fields and PK)
+        version_data = VersionDAO.get_version(
+            model_cls, entity_id, version_number
+        )
+        if version_data:
+            for field, value in version_data["snapshot"].items():
+                if field in RESTORE_EXCLUDE_FIELDS:
+                    continue
+                if field == "id":
+                    continue
+                if hasattr(entity, field):
+                    setattr(entity, field, value)
 
         return entity
 
@@ -274,6 +285,13 @@ class VersionDAO:
                 if not children_at_txn:
                     continue
 
+                # Expunge current children from ORM session to prevent
+                # cascade re-insertion on flush
+                current_children = getattr(entity, rel_name, [])
+                for child in list(current_children):
+                    if child in db.session:
+                        db.session.expunge(child)
+
                 # Delete current children via direct SQL
                 child_table = child_cls.__table__
                 db.session.execute(
@@ -281,7 +299,7 @@ class VersionDAO:
                         child_table.c[fk_column] == entity.id
                     )
                 )
-                # Expire the relationship so ORM doesn't hold stale refs
+                # Expire the relationship so ORM reloads on next access
                 db.session.expire(entity, [rel_name])
 
                 # Recreate children from version data via direct SQL
