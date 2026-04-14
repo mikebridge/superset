@@ -288,49 +288,46 @@ class DatasetDAO(BaseDAO[SqlaTable]):
                     )
 
         if override_columns:
-            db.session.query(TableColumn).filter(
-                TableColumn.table_id == model.id
-            ).delete(synchronize_session="fetch")
+            for col in model.columns[:]:
+                db.session.delete(col)
 
-            db.session.bulk_insert_mappings(
-                TableColumn,
-                [
-                    {**properties, "table_id": model.id}
-                    for properties in property_columns
-                ],
-            )
+            for properties in property_columns:
+                col = TableColumn(**{**properties, "table_id": model.id})
+                db.session.add(col)
         else:
-            columns_by_id = {column.id: column for column in model.columns}
+            cls._sync_columns(model, property_columns)
 
-            property_columns_by_id = {
-                properties["id"]: properties
-                for properties in property_columns
-                if "id" in properties
-            }
+    @classmethod
+    def _sync_columns(
+        cls,
+        model: SqlaTable,
+        property_columns: list[dict[str, Any]],
+    ) -> None:
+        """Sync columns: insert new, update existing, delete removed."""
+        columns_by_id = {column.id: column for column in model.columns}
 
-            db.session.bulk_insert_mappings(
-                TableColumn,
-                [
-                    {**properties, "table_id": model.id}
-                    for properties in property_columns
-                    if "id" not in properties
-                ],
-            )
+        property_columns_by_id = {
+            properties["id"]: properties
+            for properties in property_columns
+            if "id" in properties
+        }
 
-            db.session.bulk_update_mappings(
-                TableColumn,
-                [
-                    {**columns_by_id[properties["id"]].__dict__, **properties}
-                    for properties in property_columns_by_id.values()
-                ],
-            )
+        for properties in property_columns:
+            if "id" not in properties:
+                col = TableColumn(**{**properties, "table_id": model.id})
+                db.session.add(col)
 
-            db.session.query(TableColumn).filter(
-                TableColumn.id.in_(
-                    {column.id for column in model.columns}
-                    - property_columns_by_id.keys()
-                )
-            ).delete(synchronize_session="fetch")
+        for properties in property_columns_by_id.values():
+            existing = columns_by_id.get(properties["id"])
+            if existing:
+                for key, value in properties.items():
+                    if key != "id":
+                        setattr(existing, key, value)
+
+        ids_to_keep = property_columns_by_id.keys()
+        for col in model.columns:
+            if col.id not in ids_to_keep:
+                db.session.delete(col)
 
     @classmethod
     def update_metrics(
@@ -356,28 +353,25 @@ class DatasetDAO(BaseDAO[SqlaTable]):
             if "id" in properties
         }
 
-        db.session.bulk_insert_mappings(
-            SqlMetric,
-            [
-                {**properties, "table_id": model.id}
-                for properties in property_metrics
-                if "id" not in properties
-            ],
-        )
+        # Insert new metrics
+        for properties in property_metrics:
+            if "id" not in properties:
+                metric = SqlMetric(**{**properties, "table_id": model.id})
+                db.session.add(metric)
 
-        db.session.bulk_update_mappings(
-            SqlMetric,
-            [
-                {**metrics_by_id[properties["id"]].__dict__, **properties}
-                for properties in property_metrics_by_id.values()
-            ],
-        )
+        # Update existing metrics
+        for properties in property_metrics_by_id.values():
+            existing = metrics_by_id.get(properties["id"])
+            if existing:
+                for key, value in properties.items():
+                    if key != "id":
+                        setattr(existing, key, value)
 
-        db.session.query(SqlMetric).filter(
-            SqlMetric.id.in_(
-                {metric.id for metric in model.metrics} - property_metrics_by_id.keys()
-            )
-        ).delete(synchronize_session="fetch")
+        # Delete removed metrics
+        ids_to_keep = property_metrics_by_id.keys()
+        for metric in model.metrics:
+            if metric.id not in ids_to_keep:
+                db.session.delete(metric)
 
     @classmethod
     def find_dataset_column(cls, dataset_id: int, column_id: int) -> TableColumn | None:
