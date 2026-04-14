@@ -236,6 +236,70 @@ def prune_tasks(
         logger.exception("An error occurred while pruning async tasks: %s", ex)
 
 
+@celery_app.task(name="prune_entity_versions", bind=True)
+def prune_entity_versions(
+    self: Task,
+    **kwargs: Any,
+) -> None:
+    """Prune old entity version snapshots beyond the configured retention limit.
+
+    For each versioned model (Dashboard, Slice, SqlaTable), finds entities
+    with more versions than VERSION_HISTORY_MAX_VERSIONS and deletes the
+    oldest excess versions. Processes entities in batches to avoid
+    long-running transactions.
+    """
+    from sqlalchemy import func
+    from sqlalchemy_continuum import version_class
+
+    from superset.connectors.sqla.models import SqlaTable
+    from superset.models.dashboard import Dashboard
+    from superset.models.slice import Slice
+
+    stats_logger: BaseStatsLogger = current_app.config["STATS_LOGGER"]
+    stats_logger.incr("prune_entity_versions")
+
+    max_versions = current_app.config.get("VERSION_HISTORY_MAX_VERSIONS", 20)
+    batch_size = current_app.config.get("VERSION_PRUNE_BATCH_SIZE", 100)
+
+    total_pruned = 0
+    for model_cls in [Dashboard, Slice, SqlaTable]:
+        VersionCls = version_class(model_cls)  # noqa: N806
+
+        # Find entity IDs with more versions than the limit
+        over_limit = (
+            db.session.query(
+                VersionCls.id,
+                func.count(VersionCls.transaction_id).label("version_count"),
+            )
+            .group_by(VersionCls.id)
+            .having(func.count(VersionCls.transaction_id) > max_versions)
+            .limit(batch_size)
+            .all()
+        )
+
+        for entity_id, version_count in over_limit:
+            excess = version_count - max_versions
+            # Find the oldest excess versions (lowest transaction_ids)
+            oldest = (
+                db.session.query(VersionCls.transaction_id)
+                .filter(VersionCls.id == entity_id)
+                .order_by(VersionCls.transaction_id.asc())
+                .limit(excess)
+                .all()
+            )
+            txn_ids = [row[0] for row in oldest]
+            if txn_ids:
+                db.session.query(VersionCls).filter(
+                    VersionCls.id == entity_id,
+                    VersionCls.transaction_id.in_(txn_ids),
+                ).delete(synchronize_session=False)
+                total_pruned += len(txn_ids)
+
+        db.session.commit()
+
+    logger.info("Pruned %d entity versions", total_pruned)
+
+
 @celery_app.task(name="tasks.execute", bind=True)
 def execute_task(  # noqa: C901
     self: Any,  # Celery task instance

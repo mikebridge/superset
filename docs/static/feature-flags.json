@@ -92,6 +92,12 @@
         "default": false,
         "lifecycle": "development",
         "description": "Enables the tagging system for organizing assets"
+      },
+      {
+        "name": "VERSION_HISTORY_ENABLED",
+        "default": true,
+        "lifecycle": "development",
+        "description": "Enables version history for dashboards, charts, and datasets"
       }
     ],
     "testing": [

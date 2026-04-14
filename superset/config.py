@@ -1435,6 +1435,10 @@ class CeleryConfig:  # pylint: disable=too-few-public-methods
         #     "task": "slack.cache_channels",
         #     "schedule": crontab(minute="0", hour="*"),
         # },
+        "prune_entity_versions": {
+            "task": "prune_entity_versions",
+            "schedule": crontab(minute=0, hour=2),
+        },
     }
 
 
