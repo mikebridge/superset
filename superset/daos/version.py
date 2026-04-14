@@ -22,7 +22,6 @@ import logging
 from typing import Any
 
 from flask_appbuilder import Model
-from sqlalchemy import or_
 from sqlalchemy_continuum import transaction_class, version_class
 
 from superset import db
@@ -49,23 +48,11 @@ OPERATION_TYPE_MAP = {
 }
 
 
-# Map of parent model → list of (child_model, FK column name on the child)
-# for models whose children should be restored alongside the parent.
-VERSIONED_CHILDREN: dict[str, list[tuple[str, str]]] = {
-    "SqlaTable": [
-        ("superset.connectors.sqla.models.TableColumn", "table_id"),
-        ("superset.connectors.sqla.models.SqlMetric", "table_id"),
-    ],
+# Map of parent model name → list of relationship names whose children
+# should be reverted alongside the parent via Continuum's Reverter.
+VERSIONED_CHILDREN_RELATIONS: dict[str, list[str]] = {
+    "SqlaTable": ["columns", "metrics"],
 }
-
-
-def _import_class(dotted_path: str) -> type:
-    """Import a class from a dotted module path."""
-    module_path, class_name = dotted_path.rsplit(".", 1)
-    import importlib
-
-    module = importlib.import_module(module_path)
-    return getattr(module, class_name)
 
 
 class VersionDAO:
@@ -178,112 +165,37 @@ class VersionDAO:
     ) -> Model | None:
         """Restore an entity to a previous version.
 
-        Applies the snapshot columns (excluding audit fields) as a normal
-        UPDATE so Continuum captures the restore as a new version.
-        For models with versioned children (e.g., SqlaTable → TableColumn,
-        SqlMetric), also restores children to their state at the target
-        transaction using Continuum's validity range.
+        Uses Continuum's built-in ``revert()`` method which handles both
+        the parent entity and any versioned child relationships (e.g.,
+        SqlaTable → columns, metrics). The revert creates a new version
+        in the history chain (non-destructive).
+
         Returns the restored entity, or ``None`` if the version or entity
         does not exist.
         """
-        version_data = VersionDAO.get_version(model_cls, entity_id, version_number)
-        if version_data is None:
+        VersionCls = version_class(model_cls)  # noqa: N806
+
+        version_obj = (
+            db.session.query(VersionCls)
+            .filter(
+                VersionCls.id == entity_id,
+                VersionCls.transaction_id == version_number,
+            )
+            .one_or_none()
+        )
+
+        if version_obj is None:
             return None
 
+        # Check entity still exists
         entity = db.session.query(model_cls).get(entity_id)
         if entity is None:
             return None
 
-        snapshot = version_data["snapshot"]
-
-        # Apply snapshot fields, skipping audit fields and the PK
-        for field, value in snapshot.items():
-            if field in RESTORE_EXCLUDE_FIELDS:
-                continue
-            if field == "id":
-                continue
-            if hasattr(entity, field):
-                setattr(entity, field, value)
-
-        # Restore versioned children if configured
-        VersionDAO._restore_children(model_cls, entity_id, version_number)
+        # Use Continuum's Reverter which handles parent + child relations
+        relations = VERSIONED_CHILDREN_RELATIONS.get(
+            model_cls.__name__, []
+        )
+        version_obj.revert(relations=relations)
 
         return entity
-
-    @staticmethod
-    def _restore_children(
-        model_cls: type[Model],
-        entity_id: int,
-        target_txn: int,
-    ) -> None:
-        """Restore child entities to their state at the target transaction.
-
-        Uses Continuum's validity range: a child version was active at
-        ``target_txn`` if ``transaction_id <= target_txn`` and
-        ``(end_transaction_id IS NULL OR end_transaction_id > target_txn)``.
-        """
-        class_name = model_cls.__name__
-        children_config = VERSIONED_CHILDREN.get(class_name)
-        if not children_config:
-            return
-
-        continuum_cols = {
-            "transaction_id",
-            "end_transaction_id",
-            "operation_type",
-        }
-
-        with db.session.no_autoflush:
-            for child_path, fk_column in children_config:
-                child_cls = _import_class(child_path)
-                child_version_cls = version_class(child_cls)
-
-                # Find child versions active at the target transaction
-                fk_version_col = getattr(child_version_cls, fk_column)
-                children_at_txn = (
-                    db.session.query(child_version_cls)
-                    .filter(
-                        fk_version_col == entity_id,
-                        child_version_cls.transaction_id <= target_txn,
-                        or_(
-                            child_version_cls.end_transaction_id.is_(None),
-                            child_version_cls.end_transaction_id > target_txn,
-                        ),
-                    )
-                    .all()
-                )
-
-                if not children_at_txn:
-                    # No child versions at this transaction — either
-                    # the version predates child versioning or the
-                    # entity had no children. Leave children unchanged.
-                    continue
-
-                # Delete current children via direct SQL to avoid
-                # triggering ORM cascade/autoflush issues
-                fk_col = getattr(child_cls, fk_column)
-                child_table = child_cls.__table__
-                db.session.execute(
-                    child_table.delete().where(
-                        child_table.c[fk_column] == entity_id
-                    )
-                )
-
-                # Recreate from version data
-                for child_version in children_at_txn:
-                    values = {}
-                    for col in child_version_cls.__table__.columns:
-                        if col.name in continuum_cols:
-                            continue
-                        if col.name in RESTORE_EXCLUDE_FIELDS:
-                            continue
-                        if col.name == "id":
-                            continue
-                        try:
-                            values[col.name] = getattr(
-                                child_version, col.name
-                            )
-                        except AttributeError:
-                            pass
-                    values[fk_column] = entity_id
-                    db.session.execute(child_table.insert().values(**values))
