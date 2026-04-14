@@ -73,6 +73,7 @@ class Slice(  # pylint: disable=too-many-public-methods
     query_context_factory: QueryContextFactory | None = None
 
     __tablename__ = "slices"
+    __versioned__ = {"exclude": ["query_context"]}
     id = Column(Integer, primary_key=True)
     slice_name = Column(String(250))
     datasource_id = Column(Integer)

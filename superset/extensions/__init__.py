@@ -136,6 +136,16 @@ cache_manager = CacheManager()
 celery_app = celery.Celery()
 csrf = CSRFProtect()
 db = get_sqla_class()()
+
+# Enable SQLAlchemy-Continuum versioning for models that declare
+# __versioned__. Must be called after db is created but before any
+# model class is imported/mapped. user_cls is None because
+# security_manager.user_model is resolved at runtime; user tracking
+# is handled via a custom TransactionFactory plugin instead.
+from sqlalchemy_continuum import make_versioned
+
+make_versioned(user_cls=None)
+
 _event_logger: dict[str, Any] = {}
 encrypted_field_factory = EncryptedFieldFactory()
 event_logger = LocalProxy(lambda: _event_logger.get("event_logger"))

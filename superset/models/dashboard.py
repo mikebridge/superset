@@ -132,6 +132,7 @@ class Dashboard(CoreDashboard, AuditMixinNullable, ImportExportMixin):
     """The dashboard object!"""
 
     __tablename__ = "dashboards"
+    __versioned__ = {}
     id = Column(Integer, primary_key=True)
     dashboard_title = Column(String(500))
     position_json = Column(utils.MediumText())

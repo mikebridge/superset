@@ -1222,6 +1222,7 @@ class SqlaTable(
     owner_class = security_manager.user_model
 
     __tablename__ = "tables"
+    __versioned__ = {}
 
     # Note this uniqueness constraint is not part of the physical schema, i.e., it does
     # not exist in the migrations, but is required by `import_from_dict` to ensure the
