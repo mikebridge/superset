@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections import defaultdict, deque
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 import sqlalchemy as sqla
 from flask import current_app as app
@@ -132,7 +132,7 @@ class Dashboard(CoreDashboard, AuditMixinNullable, ImportExportMixin):
     """The dashboard object!"""
 
     __tablename__ = "dashboards"
-    __versioned__ = {}
+    __versioned__: ClassVar[dict[str, Any]] = {}
     id = Column(Integer, primary_key=True)
     dashboard_title = Column(String(500))
     position_json = Column(utils.MediumText())
@@ -222,7 +222,7 @@ class Dashboard(CoreDashboard, AuditMixinNullable, ImportExportMixin):
     @renders("dashboard_title")
     def dashboard_link(self) -> Markup:
         title = escape(self.dashboard_title or "<empty>")
-        return Markup(f'<a href="{self.url}">{title}</a>')
+        return Markup(f'<a href="{self.url}">{title}</a>')  # noqa: S704
 
     @property
     def digest(self) -> str | None:

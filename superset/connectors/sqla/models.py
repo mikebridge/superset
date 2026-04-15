@@ -23,7 +23,7 @@ from collections import defaultdict
 from collections.abc import Hashable
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any, Callable, cast, Optional, Union
+from typing import Any, Callable, cast, ClassVar, Optional, Union
 
 import pandas as pd
 import sqlalchemy as sa
@@ -848,7 +848,7 @@ class TableColumn(AuditMixinNullable, ImportExportMixin, CertificationMixin, Mod
     """ORM object for table columns, each table can have multiple columns"""
 
     __tablename__ = "table_columns"
-    __versioned__ = {}
+    __versioned__: ClassVar[dict[str, Any]] = {}
     __table_args__ = (UniqueConstraint("table_id", "column_name"),)
 
     id = Column(Integer, primary_key=True)
@@ -1094,7 +1094,7 @@ class SqlMetric(AuditMixinNullable, ImportExportMixin, CertificationMixin, Model
     """ORM object for metrics, each table can have multiple metrics"""
 
     __tablename__ = "sql_metrics"
-    __versioned__ = {}
+    __versioned__: ClassVar[dict[str, Any]] = {}
     __table_args__ = (UniqueConstraint("table_id", "metric_name"),)
 
     id = Column(Integer, primary_key=True)
@@ -1224,7 +1224,7 @@ class SqlaTable(
     owner_class = security_manager.user_model
 
     __tablename__ = "tables"
-    __versioned__ = {}
+    __versioned__: ClassVar[dict[str, Any]] = {}
 
     # Note this uniqueness constraint is not part of the physical schema, i.e., it does
     # not exist in the migrations, but is required by `import_from_dict` to ensure the
@@ -1353,7 +1353,7 @@ class SqlaTable(
         name = escape(self.name)
         url = escape(self.explore_url)
         anchor = f'<a target="_blank" href="{url}">{name}</a>'
-        return Markup(anchor)
+        return Markup(anchor)  # noqa: S704
 
     def get_catalog_perm(self) -> str | None:
         """Returns catalog permission if present, database one otherwise."""

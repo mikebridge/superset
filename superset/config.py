@@ -593,9 +593,6 @@ DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
     # Enables the tagging system for organizing assets
     # @lifecycle: development
     "TAGGING_SYSTEM": False,
-    # Enables version history for dashboards, charts, and datasets
-    # @lifecycle: development
-    "VERSION_HISTORY_ENABLED": True,
     # =================================================================
     # IN TESTING
     # =================================================================

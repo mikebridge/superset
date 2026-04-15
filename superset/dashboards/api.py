@@ -2254,8 +2254,6 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
             404:
               $ref: '#/components/responses/404'
         """
-        if not is_feature_enabled("VERSION_HISTORY_ENABLED"):
-            return self.response_404()
         page = request.args.get("page", 0, type=int)
         page_size = request.args.get("page_size", 25, type=int)
         result = VersionDAO.list_versions(Dashboard, pk, page, page_size)
@@ -2295,8 +2293,6 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
             404:
               $ref: '#/components/responses/404'
         """
-        if not is_feature_enabled("VERSION_HISTORY_ENABLED"):
-            return self.response_404()
         result = VersionDAO.get_version(Dashboard, pk, version_number)
         if result is None:
             return self.response_404()
@@ -2342,8 +2338,6 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
             422:
               $ref: '#/components/responses/422'
         """
-        if not is_feature_enabled("VERSION_HISTORY_ENABLED"):
-            return self.response_404()
         try:
             RestoreVersionCommand(Dashboard, pk, version_number).run()
             return self.response(200, message=f"Restored from version {version_number}")

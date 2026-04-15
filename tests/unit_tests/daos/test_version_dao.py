@@ -288,16 +288,26 @@ def test_get_version_returns_none_for_missing(
     assert result is None
 
 
+@patch("superset.daos.version.version_class")
 @patch("superset.daos.version.db")
 @patch("superset.daos.version.VersionDAO.get_version")
 def test_restore_version_applies_snapshot(
     mock_get_version: MagicMock,
     mock_db: MagicMock,
+    mock_version_class: MagicMock,
     app_context: None,
 ) -> None:
     from superset.daos.version import RESTORE_EXCLUDE_FIELDS, VersionDAO
 
     model_cls = MagicMock()
+    model_cls.__name__ = "Slice"
+    model_cls.__versioned__ = {"exclude": ["query_context"]}
+    version_cls = MagicMock()
+    version_obj = MagicMock()
+    mock_version_class.return_value = version_cls
+    mock_db.session.query.return_value.filter.return_value.one_or_none.return_value = (
+        version_obj
+    )
     mock_get_version.return_value = {
         "version_number": 100,
         "changed_on": "2025-06-01T12:00:00",
@@ -322,6 +332,7 @@ def test_restore_version_applies_snapshot(
     entity.id = 1  # type: ignore
     entity.slice_name = "Current Name"  # type: ignore
     entity.viz_type = "line"  # type: ignore
+    entity.query_context = '{"stale": true}'  # type: ignore
     entity.created_on = "original"  # type: ignore
     entity.created_by_fk = 99  # type: ignore
     entity.changed_on = "original"  # type: ignore
@@ -336,6 +347,9 @@ def test_restore_version_applies_snapshot(
     assert entity.slice_name == "Old Chart Name"  # type: ignore
     assert entity.viz_type == "bar"  # type: ignore
 
+    # Derived columns listed in __versioned__["exclude"] should be cleared
+    assert entity.query_context is None  # type: ignore
+
     # Audit fields and id should NOT have been overwritten
     for excluded in RESTORE_EXCLUDE_FIELDS:
         assert getattr(entity, excluded) == (
@@ -343,37 +357,40 @@ def test_restore_version_applies_snapshot(
         )
 
 
+@patch("superset.daos.version.version_class")
 @patch("superset.daos.version.db")
-@patch("superset.daos.version.VersionDAO.get_version")
 def test_restore_version_returns_none_for_missing_version(
-    mock_get_version: MagicMock,
     mock_db: MagicMock,
+    mock_version_class: MagicMock,
     app_context: None,
 ) -> None:
     from superset.daos.version import VersionDAO
 
     model_cls = MagicMock()
-    mock_get_version.return_value = None
+    mock_version_class.return_value = MagicMock()
+    mock_db.session.query.return_value.filter.return_value.one_or_none.return_value = (
+        None
+    )
 
     result = VersionDAO.restore_version(model_cls, entity_id=1, version_number=999)
 
     assert result is None
 
 
+@patch("superset.daos.version.version_class")
 @patch("superset.daos.version.db")
-@patch("superset.daos.version.VersionDAO.get_version")
 def test_restore_version_returns_none_for_missing_entity(
-    mock_get_version: MagicMock,
     mock_db: MagicMock,
+    mock_version_class: MagicMock,
     app_context: None,
 ) -> None:
     from superset.daos.version import VersionDAO
 
     model_cls = MagicMock()
-    mock_get_version.return_value = {
-        "version_number": 100,
-        "snapshot": {"id": 1, "slice_name": "Test"},
-    }
+    mock_version_class.return_value = MagicMock()
+    mock_db.session.query.return_value.filter.return_value.one_or_none.return_value = (
+        MagicMock()
+    )
     mock_db.session.query.return_value.get.return_value = None
 
     result = VersionDAO.restore_version(model_cls, entity_id=1, version_number=100)

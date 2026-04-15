@@ -213,6 +213,14 @@ class VersionDAO:
                 if hasattr(entity, field):
                     setattr(entity, field, value)
 
+        # Clear derived columns that are excluded from versioning so
+        # they get regenerated from the restored state on next access.
+        for col_name in getattr(model_cls, "__versioned__", {}).get(
+            "exclude", []
+        ):
+            if hasattr(entity, col_name):
+                setattr(entity, col_name, None)
+
         return entity
 
     @staticmethod

@@ -26,7 +26,6 @@ from superset.extensions import db
 from superset.utils import json
 from superset.utils.database import get_example_database
 from tests.integration_tests.base_tests import SupersetTestCase
-from tests.integration_tests.conftest import with_feature_flags
 from tests.integration_tests.constants import ADMIN_USERNAME
 
 
@@ -130,6 +129,44 @@ class TestDatasetVersionHistory(SupersetTestCase):
         finally:
             self._hard_delete_dataset(dataset.id)
 
+    def test_restore_nested_children(self) -> None:
+        """Restoring reverts dataset columns and metrics to the target version."""
+        dataset = self._create_test_dataset(description="original")
+        try:
+            versions_before = VersionDAO.list_versions(SqlaTable, dataset.id)
+            first_version = versions_before["result"][0]["version_number"]
+
+            dataset.description = "changed"
+            dataset.columns[0].verbose_name = "Column A"
+            dataset.columns.pop()
+            dataset.columns.append(
+                TableColumn(column_name="col_d", type="VARCHAR(255)")
+            )
+            dataset.metrics[0].expression = "SUM(1)"
+            dataset.metrics.append(
+                SqlMetric(metric_name="metric_b", expression="AVG(1)")
+            )
+            db.session.commit()
+
+            restored = VersionDAO.restore_version(SqlaTable, dataset.id, first_version)
+            assert restored is not None
+            db.session.commit()
+            db.session.expire_all()
+
+            refreshed = db.session.query(SqlaTable).get(dataset.id)
+            assert refreshed is not None
+            assert refreshed.description == "original"
+            assert sorted(column.column_name for column in refreshed.columns) == [
+                "col_a",
+                "col_b",
+                "col_c",
+            ]
+            assert [
+                (metric.metric_name, metric.expression) for metric in refreshed.metrics
+            ] == [("metric_a", "COUNT(*)")]
+        finally:
+            self._hard_delete_dataset(dataset.id)
+
     def test_restore_creates_new_version(self) -> None:
         """Restoring creates a new version entry (count goes from 2 to 3)."""
         dataset = self._create_test_dataset(description="v1 desc")
@@ -172,14 +209,3 @@ class TestDatasetVersionHistory(SupersetTestCase):
         rv = self.client.post(uri)
         assert rv.status_code == 404
 
-    @with_feature_flags(VERSION_HISTORY_ENABLED=False)
-    def test_feature_flag_disabled_returns_404(self) -> None:
-        """Version endpoints return 404 when feature flag is off."""
-        dataset = self._create_test_dataset()
-        try:
-            self.login(ADMIN_USERNAME)
-            uri = f"/api/v1/dataset/{dataset.id}/versions/"
-            rv = self.client.get(uri)
-            assert rv.status_code == 404
-        finally:
-            self._hard_delete_dataset(dataset.id)
