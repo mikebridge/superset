@@ -54,6 +54,14 @@ VERSIONED_CHILDREN_RELATIONS: dict[str, list[str]] = {
     "SqlaTable": ["columns", "metrics"],
 }
 
+# Map of parent model name → list of (relationship_name, related_fk_column)
+# tuples for many-to-many relationships that should be restored alongside
+# the parent.  The related_fk_column is the column in the association table
+# that points to the related entity (e.g. slice_id in dashboard_slices).
+VERSIONED_M2M_RELATIONS: dict[str, list[tuple[str, str]]] = {
+    "Dashboard": [("slices", "slice_id")],
+}
+
 
 class VersionDAO:
     """Data access layer for entity version history."""
@@ -213,6 +221,13 @@ class VersionDAO:
                 if hasattr(entity, field):
                     setattr(entity, field, value)
 
+        # Restore M2M relationships (e.g. dashboard↔charts)
+        m2m_relations = VERSIONED_M2M_RELATIONS.get(model_cls.__name__, [])
+        if m2m_relations:
+            VersionDAO._restore_m2m_relationships(
+                entity, version_number, m2m_relations
+            )
+
         # Clear derived columns that are excluded from versioning so
         # they get regenerated from the restored state on next access.
         for col_name in getattr(model_cls, "__versioned__", {}).get(
@@ -341,3 +356,104 @@ class VersionDAO:
                     db.session.execute(
                         child_table.insert().values(**values)
                     )
+
+    @staticmethod
+    def _restore_m2m_relationships(
+        entity: Model,
+        target_txn: int,
+        m2m_config: list[tuple[str, str]],
+    ) -> None:
+        """Restore many-to-many relationships to their state at target_txn.
+
+        Starts with the current set of related IDs, then replays tracked
+        changes to compute the target state.  Related entities whose
+        association pre-dates Continuum tracking are preserved (no INSERT
+        record exists, so we assume they were present).  Related entities
+        that have been hard-deleted are silently skipped.
+        """
+        from sqlalchemy import Table
+
+        mapper = entity.__class__.__mapper__
+
+        for rel_name, related_fk in m2m_config:
+            prop = mapper.get_property(rel_name)
+            related_cls = prop.mapper.class_
+            secondary = prop.secondary
+
+            # Find the FK column pointing to the entity's table
+            entity_fk = None
+            for fk in secondary.foreign_keys:
+                if fk.column.table == entity.__class__.__table__:
+                    entity_fk = fk.parent.name
+                    break
+
+            if entity_fk is None:
+                continue
+
+            # Reflect the version table from the database
+            version_table_name = f"{secondary.name}_version"
+            version_table = db.metadata.tables.get(version_table_name)
+            if version_table is None:
+                version_table = Table(
+                    version_table_name,
+                    db.metadata,
+                    autoload_with=db.engine,
+                )
+
+            # Start with the current set of related IDs.  IDs that
+            # pre-date Continuum tracking have no version rows, so
+            # starting from the current set preserves them.
+            current_ids = {
+                r.id for r in getattr(entity, rel_name, [])
+            }
+
+            # Fetch version rows AFTER target_txn — these are changes
+            # we need to undo.  Ordered newest-first for dedup.
+            changes_after = db.session.execute(
+                version_table.select()
+                .where(version_table.c[entity_fk] == entity.id)
+                .where(version_table.c.transaction_id > target_txn)
+                .order_by(version_table.c.transaction_id.desc())
+            ).fetchall()
+
+            if not changes_after:
+                # No changes after target — relationship is already
+                # in the target state.
+                continue
+
+            # Deduplicate: keep only the most recent change per ID
+            # after the target transaction.
+            seen: set[int] = set()
+            for row in changes_after:
+                rid = row._mapping[related_fk]
+                if rid in seen:
+                    continue
+                seen.add(rid)
+                op = row._mapping["operation_type"]
+                if op == 0:
+                    # INSERT after target → was not present at target
+                    current_ids.discard(rid)
+                elif op == 2:
+                    # DELETE after target → was present at target
+                    current_ids.add(rid)
+
+            # Verify related entities still exist
+            if current_ids:
+                existing = db.session.query(related_cls.id).filter(
+                    related_cls.id.in_(current_ids)
+                ).all()
+                valid_ids = {r[0] for r in existing}
+            else:
+                valid_ids = set()
+
+            # Assign via ORM so Continuum tracks the changes
+            if valid_ids:
+                related_objects = (
+                    db.session.query(related_cls)
+                    .filter(related_cls.id.in_(valid_ids))
+                    .all()
+                )
+            else:
+                related_objects = []
+
+            setattr(entity, rel_name, related_objects)

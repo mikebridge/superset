@@ -396,3 +396,40 @@ def test_restore_version_returns_none_for_missing_entity(
     result = VersionDAO.restore_version(model_cls, entity_id=1, version_number=100)
 
     assert result is None
+
+
+@patch("superset.daos.version.VersionDAO._restore_m2m_relationships")
+@patch("superset.daos.version.version_class")
+@patch("superset.daos.version.db")
+@patch("superset.daos.version.VersionDAO.get_version")
+def test_restore_version_restores_m2m_for_dashboard(
+    mock_get_version: MagicMock,
+    mock_db: MagicMock,
+    mock_version_class: MagicMock,
+    mock_restore_m2m: MagicMock,
+    app_context: None,
+) -> None:
+    from superset.daos.version import VersionDAO
+
+    model_cls = MagicMock()
+    model_cls.__name__ = "Dashboard"
+    model_cls.__versioned__ = {}
+    version_obj = MagicMock()
+    entity = MagicMock()
+
+    mock_version_class.return_value = MagicMock()
+    mock_db.session.query.return_value.filter.return_value.one_or_none.return_value = (
+        version_obj
+    )
+    mock_db.session.query.return_value.get.return_value = entity
+    mock_get_version.return_value = {
+        "version_number": 100,
+        "snapshot": {"id": 1, "dashboard_title": "Old Title"},
+    }
+
+    result = VersionDAO.restore_version(model_cls, entity_id=1, version_number=100)
+
+    assert result is entity
+    mock_restore_m2m.assert_called_once_with(
+        entity, 100, [("slices", "slice_id")]
+    )
