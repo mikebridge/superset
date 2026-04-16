@@ -606,6 +606,13 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         self.configure_fab()
         self.configure_url_map_converters()
         self.configure_data_sources()
+
+        # Register baseline version capture listener — must come after
+        # configure_data_sources() so that versioned models are imported.
+        from superset.models.version_baseline import register_baseline_listener
+
+        register_baseline_listener(db.session)
+
         self.configure_auth_provider()
         self.configure_async_queries()
         self.configure_ssh_manager()
