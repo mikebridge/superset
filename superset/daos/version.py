@@ -495,29 +495,24 @@ class VersionDAO:
                 return version_number
         return None
 
-    # Per-model relationships that Continuum's Reverter should recurse into.
-    # Keys are model class names (__name__); values are the relationship
-    # attribute names on the live class.
-    #
-    # Empty for every versioned model because the native Reverter can't
-    # recurse safely here:
-    #
-    # * ``Dashboard.slices`` is excluded from Continuum versioning (see
-    #   ADR-004 and the ``__versioned__['exclude']`` lists), so no
-    #   ``dashboard_slices_version`` table exists for the Reverter to
-    #   consult. Passing ``relations=["slices"]`` crashes in Continuum with
-    #   an ``AttributeError`` on ``association_version_table``. Chart
-    #   associations are not restored — follow-up work (transaction-replay
-    #   per ADR-004).
-    # * ``SqlaTable.columns`` / ``metrics`` hit ADR-004 Failure 1
-    #   (``InvalidRequestError: Instance has been deleted`` from flush
-    #   ordering) plus the ``override_columns`` deduplication problem.
-    #   Instead, ``restore_version`` runs a custom path
-    #   (:meth:`_restore_dataset_children`) that works from the version
-    #   tables directly.
+    # SPIKE (sc-103156-versioning-full-continuum-spike): Per-model
+    # relationships that Continuum's Reverter should recurse into. Re-enabled
+    # for child collections to test whether Continuum can manage them
+    # natively when the original ADR-004 failure modes are addressed:
+    # * Failure 2 (M2M AttributeError) — addressed by un-excluding ``slices``
+    #   from ``Dashboard.__versioned__`` so the association_version_table
+    #   exists.
+    # * Failure 3 (TableColumn changed_on noise) — addressed by adding
+    #   ``changed_on`` / ``created_on`` / ``*_by_fk`` to
+    #   ``TableColumn.__versioned__["exclude"]`` and the ``SqlMetric``
+    #   equivalent, so Continuum doesn't capture noise rows.
+    # * Failure 1 (override_columns overlapping validity) — the spike's real
+    #   test. ``restore_version`` no longer dispatches to the snapshot-based
+    #   custom child path; if the dataset tests fail with overlapping-validity
+    #   errors, we revisit ``DatasetDAO.update_columns()``.
     _RESTORE_RELATIONS: dict[str, list[str]] = {
-        "SqlaTable": [],
-        "Dashboard": [],
+        "SqlaTable": ["columns", "metrics"],
+        "Dashboard": ["slices"],
         "Slice": [],
     }
 
@@ -703,8 +698,47 @@ class VersionDAO:
         if target_version is None:
             return None
 
+        # SPIKE: split a multi-relationship revert into one
+        # ``target_version.revert(relations=[<one>])`` call per relationship,
+        # with a flush + targeted expire between them. This dodges a
+        # Continuum bug where calling ``revert(relations=['a', 'b'])`` raises
+        # ``InvalidRequestError: Instance has been deleted`` whenever the
+        # target tx requires removing a live child of either relationship.
+        #
+        # Root cause: ``Reverter.revert_relationships`` iterates relations in
+        # order. For each, pass A reverts shadowed children (setattr-only)
+        # and pass B calls ``session.delete(live_child)`` for any live child
+        # not in the reverted set. Moving to the next relationship runs
+        # ``getattr(self.obj, next_prop.key)`` which is a Continuum query →
+        # SQLAlchemy autoflush → the pending DELETE from the previous pass B
+        # is flushed → those instances transition to ``state.deleted=True``.
+        # Reverter's final ``session.add(self.version_parent)`` then walks
+        # the parent's ``save-update`` cascade through its in-memory
+        # collection (still pointing at the deleted-state instances) and
+        # SQLAlchemy raises. With one relation per call there's no
+        # inter-relationship autoflush window, and the explicit flush +
+        # expire after each call clears the in-memory references before the
+        # next revert's cascade runs. See ``spike-continuum-restore.md`` for
+        # the minimal repro.
         relations = VersionDAO._RESTORE_RELATIONS.get(model_cls.__name__, [])
-        target_version.revert(relations=relations)
+        try:
+            if not relations:
+                target_version.revert(relations=[])
+            else:
+                for relation_name in relations:
+                    target_version.revert(relations=[relation_name])
+                    db.session.flush()
+                    db.session.expire(entity, relations)
+        except Exception:
+            logger.exception(
+                "SPIKE: Continuum revert() failed for %s id=%s tx=%s "
+                "relations=%s",
+                model_cls.__name__,
+                entity.id,
+                target_version.transaction_id,
+                relations,
+            )
+            raise
 
         # Continuum's revert() copies *every* versioned column from the
         # snapshot onto the live entity, including changed_on and
@@ -715,20 +749,6 @@ class VersionDAO:
         # created_by_fk are intentionally left alone — they continue to
         # reflect when/who first created the entity.
         VersionDAO._stamp_audit_fields_for_restore(entity)
-
-        # Datasets: column/metric children are excluded from Continuum's
-        # native recursion (see _RESTORE_RELATIONS comment) and are rebuilt
-        # below via direct SQL.
-        if model_cls.__name__ == "SqlaTable":
-            VersionDAO._restore_dataset_children(entity, target_version.transaction_id)
-        # Dashboards: chart membership (dashboard_slices m:n) is rebuilt
-        # from the JSON snapshot captured at the target tx. Tags, owners,
-        # and roles are out of v1 scope (ADR-005).
-        if model_cls.__name__ == "Dashboard":
-            VersionDAO._restore_dashboard_children(
-                entity, target_version.transaction_id
-            )
-
         return entity
 
     @staticmethod
