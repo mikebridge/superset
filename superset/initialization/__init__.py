@@ -665,6 +665,7 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         register_dashboard_snapshot_listener()
         register_change_record_listener()
 
+
         # Retention-prune listener: after each commit, delete oldest version rows
         # that exceed SUPERSET_VERSION_HISTORY_MAX_VERSIONS (FR-007).
         versioned_model_set = frozenset(versioned_models)

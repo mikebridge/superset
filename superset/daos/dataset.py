@@ -291,11 +291,48 @@ class DatasetDAO(BaseDAO[SqlaTable]):
     def _override_columns(
         cls, model: SqlaTable, property_columns: list[dict[str, Any]]
     ) -> None:
-        for col in list(model.columns):
-            db.session.delete(col)
-        db.session.flush()
-        for properties in property_columns:
-            db.session.add(TableColumn(**{**properties, "table_id": model.id}))
+        """Replace columns by natural key (``column_name``) — update in place
+        rather than delete-and-reinsert.
+
+        SPIKE (sc-103156-versioning-full-continuum-spike): the previous
+        delete-and-reinsert pattern produced overlapping shadow rows in
+        ``table_columns_version`` (the same ``column_name`` had a DELETE
+        shadow at tx N alongside an INSERT shadow at tx N for a fresh PK).
+        Continuum's ``Reverter`` couldn't unwind this on restore: its flush
+        ordering inserts the historical row before deleting the live one,
+        hitting the ``UNIQUE (table_id, column_name)`` constraint mid-flush
+        (ADR-004 Failure 1).
+
+        The natural-key upsert keeps PKs stable across metadata refresh.
+        Continuum captures only real field changes; new columns get plain
+        INSERT shadows; removed columns get plain DELETE shadows. No
+        natural-key collisions, so Reverter can restore cleanly.
+
+        Behaviour change vs. the previous implementation: PKs of unchanged
+        columns are preserved. Charts that reference columns by their
+        ``id`` continue to work across a metadata refresh — previously
+        such references would be invalidated.
+        """
+        existing_by_name = {c.column_name: c for c in model.columns}
+        incoming_by_name = {p["column_name"]: p for p in property_columns}
+
+        # Update columns present in both: in-place setattr.
+        for name, col in existing_by_name.items():
+            if name in incoming_by_name:
+                for key, value in incoming_by_name[name].items():
+                    setattr(col, key, value)
+
+        # Insert columns present only in incoming.
+        for name, properties in incoming_by_name.items():
+            if name not in existing_by_name:
+                db.session.add(
+                    TableColumn(**{**properties, "table_id": model.id})
+                )
+
+        # Delete columns present only in existing.
+        for name, col in existing_by_name.items():
+            if name not in incoming_by_name:
+                db.session.delete(col)
 
     @classmethod
     def _upsert_columns(

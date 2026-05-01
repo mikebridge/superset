@@ -872,11 +872,15 @@ class TableColumn(AuditMixinNullable, ImportExportMixin, CertificationMixin, Mod
 
     __tablename__ = "table_columns"
     __table_args__ = (UniqueConstraint("table_id", "column_name"),)
-    # NOTE: Not Continuum-versioned. Dataset child history is captured as
-    # JSON snapshots in ``dataset_snapshots`` via the after_flush listener
-    # in superset/versioning/dataset_snapshots.py. The validity-strategy
-    # shadow table approach proved fragile against Superset's
-    # override_columns=True delete+reinsert pattern.
+    # SPIKE (sc-103156-versioning-full-continuum-spike): Continuum-versioned
+    # again, with audit-field exclusions to suppress the per-column-per-save
+    # noise rows that ADR-004 flagged as Failure 3. ``changed_on`` refreshes
+    # on every parent dataset save even when the column itself wasn't user-
+    # edited; capturing it produced one shadow row per column per save with
+    # no user signal.
+    __versioned__: dict[str, Any] = {
+        "exclude": ["changed_on", "created_on", "changed_by_fk", "created_by_fk"]
+    }
 
     id = Column(Integer, primary_key=True)
     column_name = Column(String(255), nullable=False)
@@ -1122,8 +1126,10 @@ class SqlMetric(AuditMixinNullable, ImportExportMixin, CertificationMixin, Model
 
     __tablename__ = "sql_metrics"
     __table_args__ = (UniqueConstraint("table_id", "metric_name"),)
-    # NOTE: Not Continuum-versioned. See TableColumn — metrics are
-    # captured in dataset_snapshots alongside columns.
+    # SPIKE: same audit-field exclusions as TableColumn (see above).
+    __versioned__: dict[str, Any] = {
+        "exclude": ["changed_on", "created_on", "changed_by_fk", "created_by_fk"]
+    }
 
     id = Column(Integer, primary_key=True)
     metric_name = Column(String(255), nullable=False)

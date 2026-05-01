@@ -578,10 +578,22 @@ def register_change_record_listener() -> None:
 
         uow = versioning_manager.units_of_work.get(session.connection())
         if uow is None or uow.current_transaction is None:
+            logger.info(
+                "SPIKE change_records: skipping flush — uow=%s "
+                "current_tx=%s buffer_keys=%s",
+                "None" if uow is None else "present",
+                None if uow is None else uow.current_transaction,
+                list(buffer.keys()),
+            )
             session.info[_BUFFER_KEY] = {}
             return
 
         tx_id = uow.current_transaction.id
+        logger.info(
+            "SPIKE change_records: flush tx=%s buffer_keys=%s",
+            tx_id,
+            list(buffer.keys()),
+        )
 
         # Skip if we've already written records for this tx (after_flush
         # can fire more than once per commit — e.g. autoflush from a
@@ -595,14 +607,28 @@ def register_change_record_listener() -> None:
             return
 
         _append_child_records_to_buffer(session, tx_id, buffer)
+        logger.info(
+            "SPIKE change_records: post-append tx=%s buffer=%s",
+            tx_id,
+            {k: len(v) for k, v in buffer.items()},
+        )
 
         if not buffer:
+            # Don't mark tx as processed when nothing was inserted. A
+            # later after_flush firing for the same tx may carry the
+            # records — e.g. when this entity's edit lands across two
+            # flushes (a child-only flush followed by a parent-dirty
+            # flush): the dataset_snapshot listener only writes its row
+            # in the parent-dirty flush, so the child-diff path can't
+            # find a snapshot to compare against until then.
             session.info[_BUFFER_KEY] = {}
-            processed.add(tx_id)
             return
 
         try:
             _bulk_insert_records(session, tx_id, buffer)
+            logger.info(
+                "SPIKE change_records: inserted records for tx=%s entities=%d",
+                tx_id, len(buffer))
         except OperationalError:
             # version_changes table missing (migration not yet applied).
             pass
