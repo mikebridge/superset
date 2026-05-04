@@ -157,12 +157,42 @@ def upgrade() -> None:
 
     # ------------------------------------------------------------------
     # dashboard_slices_version (M2M association)
+    #
+    # The live ``dashboard_slices`` table on master carries a surrogate
+    # ``id`` PK (it's been there since the original schema — not a spike
+    # addition). Continuum auto-mirrors the live columns into the shadow
+    # Table object at ``make_versioned()`` time, so the shadow's
+    # SQLAlchemy metadata always includes ``id``. We can't easily strip
+    # it from the metadata, so the DB column has to exist.
+    #
+    # Continuum's M2M tracking
+    # (``manager.track_association_operations``) builds the shadow INSERT
+    # as ``**params + transaction_id + operation_type``, where ``params``
+    # comes from the live ``dashboard_slices`` INSERT — which doesn't
+    # carry the auto-generated ``id`` at INSERT time (the DB fills it
+    # from a sequence). A NOT-NULL ``id`` without a sequence default
+    # would deterministically raise on every dashboard membership change.
+    #
+    # The fix: declare ``id`` as ``BigInteger(autoincrement=True,
+    # nullable=False)`` with an explicit Sequence default. Continuum's
+    # INSERT lands without ``id``; the sequence supplies one. The PK
+    # follows Continuum's standard (``id``, ``transaction_id``) so
+    # repeated edits produce one shadow row per (membership change, tx).
     # ------------------------------------------------------------------
     op.create_table(
         "dashboard_slices_version",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("dashboard_id", sa.Integer(), nullable=True),
-        sa.Column("slice_id", sa.Integer(), nullable=True),
+        sa.Column(
+            "id",
+            sa.BigInteger(),
+            sa.Sequence("dashboard_slices_version_id_seq"),
+            autoincrement=True,
+            nullable=False,
+            server_default=sa.text(
+                "nextval('dashboard_slices_version_id_seq'::regclass)"
+            ),
+        ),
+        sa.Column("dashboard_id", sa.Integer(), nullable=False),
+        sa.Column("slice_id", sa.Integer(), nullable=False),
         sa.Column("transaction_id", sa.BigInteger(), nullable=False),
         sa.Column("end_transaction_id", sa.BigInteger(), nullable=True),
         sa.Column("operation_type", sa.SmallInteger(), nullable=False),

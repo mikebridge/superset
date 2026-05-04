@@ -228,6 +228,72 @@ def _baseline_children_for_parent(
                     "dashboard_id",
                     tx_id,
                 )
+            # Also synthesize op=0 baseline rows in slices_version for each
+            # slice attached to this dashboard that has no shadow rows yet.
+            # Continuum's M2M version-side relationship for ``Dashboard.slices``
+            # joins through both ``dashboard_slices_version`` AND
+            # ``slices_version``: the second exists clause filters slices by
+            # "latest slices_version row with tx <= dashboard.tx". If a slice
+            # has no slices_version rows at all, that join produces no match
+            # and ``version_obj.slices`` returns empty — leaving the dashboard
+            # restore with no slices to append. By inserting an op=0 row at
+            # this dashboard's baseline tx, we give the M2M query a slice
+            # version it can match.
+            #
+            # Doesn't try to be clever about slices shared across dashboards:
+            # we baseline at this dashboard's tx_id only when the slice has no
+            # shadow rows at all. If a later dashboard baseline references the
+            # same slice, this baseline (now at lower tx) is still found by
+            # that dashboard's restore. The reverse — a dashboard baselined
+            # AFTER the slice was first baselined under another dashboard at
+            # a higher tx — is the residual gap, deferred to a future fix.
+            from superset.models.slice import Slice
+            slice_ver_table = version_class(Slice).__table__
+            slice_table = Slice.__table__
+            conn = session.connection()
+            slice_ids = [
+                r.slice_id
+                for r in conn.execute(
+                    sa.select(live_tbl.c.slice_id).where(
+                        live_tbl.c.dashboard_id == parent_obj.id
+                    )
+                ).all()
+            ]
+            for slice_id in slice_ids:
+                already_has_shadow = (
+                    conn.execute(
+                        sa.select(sa.func.count())
+                        .select_from(slice_ver_table)
+                        .where(slice_ver_table.c.id == slice_id)
+                    ).scalar()
+                    or 0
+                )
+                if already_has_shadow:
+                    continue
+                slice_row = (
+                    conn.execute(
+                        sa.select(slice_table).where(slice_table.c.id == slice_id)
+                    )
+                    .mappings()
+                    .first()
+                )
+                if slice_row is None:
+                    continue
+                meta_col_names = {
+                    "transaction_id",
+                    "end_transaction_id",
+                    "operation_type",
+                }
+                col_values: dict[Any, Any] = {}
+                for col in slice_ver_table.columns:
+                    if col.name in meta_col_names:
+                        continue
+                    if col.name in slice_row:
+                        col_values[col] = slice_row[col.name]
+                col_values[slice_ver_table.c.transaction_id] = tx_id
+                col_values[slice_ver_table.c.end_transaction_id] = None
+                col_values[slice_ver_table.c.operation_type] = 0
+                conn.execute(slice_ver_table.insert().values(col_values))
     except Exception:  # pylint: disable=broad-except
         logger.exception(
             "baseline_listener: failed to baseline children of %s id=%s",
