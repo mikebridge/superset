@@ -139,11 +139,13 @@ class VersionDAO:
         :meth:`list_versions` would return, or ``None`` when the entity has
         no version rows yet.
 
-        Note: this index is *unstable under retention pruning*. When the
-        entity is at :envvar:`SUPERSET_VERSION_HISTORY_MAX_VERSIONS`,
-        pruning drops the oldest closed row on each save, so the same
-        integer can refer to different rows before and after a PUT. Use
-        :meth:`current_live_transaction_id` for a stable identifier.
+        Note: this index is *unstable under retention pruning*. The
+        scheduled :func:`prune_old_versions` task drops shadow rows
+        whose owning ``version_transaction`` is older than
+        :envvar:`SUPERSET_VERSION_HISTORY_RETENTION_DAYS`, so the same
+        integer can refer to different rows before and after a prune
+        cycle. Use :meth:`current_live_transaction_id` for a stable
+        identifier.
         """
         count = VersionDAO._get_version_count(model_cls, entity_id)
         return count - 1 if count > 0 else None
@@ -175,111 +177,6 @@ class VersionDAO:
         if tx_id is None:
             return None
         return derive_version_uuid(entity_uuid, tx_id)
-
-    @staticmethod
-    def prune_versions(model_cls: type, entity_id: int) -> None:
-        """Delete the oldest version row(s) when the history exceeds the
-        configured retention limit.
-
-        The live version row (``end_transaction_id IS NULL``) is never pruned.
-        Pruning is best-effort; failures are logged and silently ignored so
-        that the calling commit listener is not disrupted.
-
-        Uses a fresh engine connection so it is safe to call from an
-        ``after_commit`` session event (where the session has no active
-        transaction).
-        """
-        from flask import current_app  # pylint: disable=import-outside-toplevel
-
-        from superset.extensions import db  # pylint: disable=import-outside-toplevel
-
-        max_versions: int = current_app.config.get(
-            "SUPERSET_VERSION_HISTORY_MAX_VERSIONS", 25
-        )
-
-        ver_cls = version_class(model_cls)
-        ver_tbl = ver_cls.__table__
-
-        try:
-            # Use engine.begin() (auto-commits on context exit) since this may
-            # be called from an after_commit listener where the session has no
-            # active transaction.
-            with db.engine.begin() as conn:
-                count: int = (
-                    conn.execute(
-                        sa.select(sa.func.count()).where(ver_tbl.c.id == entity_id)
-                    ).scalar()
-                    or 0
-                )
-
-                excess = count - max_versions
-                if excess <= 0:
-                    return
-
-                # Oldest non-live rows by transaction_id ascending.
-                oldest_tx_ids = (
-                    conn.execute(
-                        sa.select(ver_tbl.c.transaction_id)
-                        .where(
-                            ver_tbl.c.id == entity_id,
-                            ver_tbl.c.end_transaction_id.is_not(None),
-                        )
-                        .order_by(ver_tbl.c.transaction_id.asc())
-                        .limit(excess)
-                    )
-                    .scalars()
-                    .all()
-                )
-
-                if oldest_tx_ids:
-                    conn.execute(
-                        sa.delete(ver_tbl).where(
-                            ver_tbl.c.id == entity_id,
-                            ver_tbl.c.transaction_id.in_(oldest_tx_ids),
-                        )
-                    )
-                    # Drop this entity's change records for the pruned txs too
-                    # (T052 item d). The DB-level FK on version_changes is
-                    # ON DELETE CASCADE against version_transaction, but we
-                    # don't delete the tx row here (it may be shared across
-                    # entities), so the cascade doesn't fire for us. Explicit
-                    # per-(entity_kind, entity_id) delete keeps other entities'
-                    # records on the same tx intact.
-                    from superset.versioning.changes import (  # noqa: E402
-                        _ENTITY_KIND_BY_CLASS_NAME,
-                        version_changes_table,
-                    )
-
-                    entity_kind = _ENTITY_KIND_BY_CLASS_NAME.get(model_cls.__name__)
-                    if entity_kind is not None:
-                        try:
-                            conn.execute(
-                                sa.delete(version_changes_table).where(
-                                    version_changes_table.c.entity_kind == entity_kind,
-                                    version_changes_table.c.entity_id == entity_id,
-                                    version_changes_table.c.transaction_id.in_(
-                                        oldest_tx_ids
-                                    ),
-                                )
-                            )
-                        except sa.exc.OperationalError:
-                            # version_changes table missing (pre-migration) —
-                            # don't block the shadow-row prune. Narrow catch
-                            # mirrors the listener's policy: real DB errors
-                            # surface; only the SQLite "no such table"
-                            # bootstrap race is silenced.
-                            logger.debug(
-                                "prune_versions: change-record cleanup skipped"
-                                " for %s id=%s",
-                                model_cls.__name__,
-                                entity_id,
-                            )
-        except Exception:  # pylint: disable=broad-except
-            logger.exception(
-                "prune_versions: failed for %s id=%s",
-                model_cls.__name__,
-                entity_id,
-            )
 
     @staticmethod
     def list_change_records_batch(

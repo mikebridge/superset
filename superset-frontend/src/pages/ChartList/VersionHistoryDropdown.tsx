@@ -56,41 +56,93 @@ interface Props {
   onRestored?: () => void;
 }
 
+// Layout-record path verbs (set by ``diff_dashboard_layout`` on the
+// backend): path = [verb, kind, id]. Same shape across the three
+// debug widgets so chart/dataset dropdowns also recognise them — even
+// though they don't normally produce layout records, the formatter
+// stays uniform.
+const LAYOUT_VERBS = new Set(['add', 'remove', 'move', 'edit']);
+
+function summarizeChange(c: Change): string {
+  if (c.path.length === 3 && LAYOUT_VERBS.has(String(c.path[0]))) {
+    const verbMap: Record<string, string> = {
+      add: t('Added'),
+      remove: t('Removed'),
+      move: t('Moved'),
+      edit: t('Edited'),
+    };
+    const verb = verbMap[String(c.path[0])];
+    const kind = String(c.path[1]);
+    const payload =
+      ((c.to_value ?? c.from_value) as { name?: string } | null) ?? null;
+    const name = payload?.name;
+    return name ? `${verb} ${kind} '${name}'` : `${verb} ${kind}`;
+  }
+
+  const verb =
+    c.from_value == null && c.to_value != null
+      ? t('Added')
+      : c.from_value != null && c.to_value == null
+        ? t('Removed')
+        : t('Changed');
+
+  if (c.path.length === 2 && (c.kind === 'column' || c.kind === 'metric')) {
+    return `${verb} ${c.kind} '${c.path[1]}'`;
+  }
+
+  if (c.path[0] === 'slices') {
+    return `${verb} chart ${c.path[1] ?? ''}`.trim();
+  }
+
+  if (c.kind === 'field') {
+    const fieldName = String(c.path[c.path.length - 1]);
+    const fieldLabel: string =
+      fieldName === 'dashboard_title'
+        ? t('title')
+        : fieldName === 'slice_name'
+          ? t('chart name')
+          : fieldName === 'table_name'
+            ? t('table name')
+            : fieldName;
+    const isShortScalar =
+      c.to_value !== null &&
+      c.to_value !== undefined &&
+      (typeof c.to_value === 'string' ||
+        typeof c.to_value === 'number' ||
+        typeof c.to_value === 'boolean') &&
+      String(c.to_value).length <= 80;
+    if (verb === t('Changed') && isShortScalar) {
+      return t('Changed %(field)s to "%(value)s"', {
+        field: fieldLabel,
+        value: String(c.to_value),
+      });
+    }
+    if (verb === t('Removed')) {
+      return t('Cleared %(field)s', { field: fieldLabel });
+    }
+    if (verb === t('Added') && isShortScalar) {
+      return t('Set %(field)s to "%(value)s"', {
+        field: fieldLabel,
+        value: String(c.to_value),
+      });
+    }
+    return `${verb} ${fieldLabel}`;
+  }
+
+  if (c.path.length) {
+    return `${verb} ${c.kind} ${c.path[c.path.length - 1]}`;
+  }
+  return `${verb} ${c.kind}`;
+}
+
 function formatChangeTitle(changes: Change[]): string {
   if (!changes.length) return t('No changes recorded');
-
-  // Pick the first change record as the headline. If multiple changes
-  // share the same kind, summarise as "Edited N <kind>s".
-  const first = changes[0];
-  const sameKind = changes.every(c => c.kind === first.kind);
-
-  const verb = (() => {
-    if (first.from_value == null && first.to_value != null) return t('Added');
-    if (first.from_value != null && first.to_value == null) return t('Removed');
-    return t('Changed');
-  })();
-
-  const subject = (() => {
-    // For child kinds (filter, metric, etc.) the path is e.g.
-    // ["params", "adhoc_filters", <subject>]; the trailing segment is
-    // the natural key.
-    if (first.path.length >= 2) {
-      return `${first.kind} ${first.path[first.path.length - 1]}`;
-    }
-    if (first.path.length === 1) {
-      return first.path[0];
-    }
-    return first.kind;
-  })();
-
-  if (sameKind && changes.length > 1) {
-    return t('%(verb)s %(count)s %(kind)ss', {
-      verb,
-      count: changes.length,
-      kind: first.kind,
-    });
-  }
-  return `${verb} ${subject}`;
+  const first = summarizeChange(changes[0]);
+  if (changes.length === 1) return first;
+  return t('%(first)s (+%(more)s more)', {
+    first,
+    more: changes.length - 1,
+  });
 }
 
 function formatUser(by: ChangedBy | null): string {
@@ -207,6 +259,26 @@ export default function VersionHistoryDropdown({
             <div style={{ fontSize: 12, opacity: 0.75 }}>
               {formatUser(v.changed_by)} · {formatDate(v.issued_at)}
             </div>
+            {v.changes.length > 1 && (
+              <ul
+                style={{
+                  margin: '4px 0 0 18px',
+                  padding: 0,
+                  fontSize: 12,
+                  opacity: 0.85,
+                  listStyle: 'disc',
+                }}
+              >
+                {v.changes.slice(0, 5).map((c, i) => (
+                  <li key={i}>{summarizeChange(c)}</li>
+                ))}
+                {v.changes.length > 5 && (
+                  <li style={{ opacity: 0.6 }}>
+                    {t('+%(n)s more', { n: v.changes.length - 5 })}
+                  </li>
+                )}
+              </ul>
+            )}
           </div>
         ),
       };

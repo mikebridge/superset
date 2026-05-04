@@ -68,7 +68,6 @@ from sqlalchemy import event
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from superset.utils import json as _superset_json
 from superset.versioning.diff import (
     ChangeRecord,
     diff_dashboard,
@@ -77,6 +76,7 @@ from superset.versioning.diff import (
     diff_dataset_columns,
     diff_dataset_metrics,
     diff_slice,
+    fold_dashboard_layout_with_chart_changes,
     scalar_fields_for,
 )
 
@@ -103,7 +103,7 @@ version_changes_table = sa.Table(
     # dynamically by SQLAlchemy-Continuum at mapper-configuration time;
     # integration tests that materialise schema via ``metadata.create_all``
     # before Continuum runs would hit ``NoReferencedTableError``. Same
-    # pattern as ``dataset_snapshots`` and ``dashboard_snapshots``.
+    # pattern as the other versioning tables.
     sa.Column("transaction_id", sa.BigInteger, nullable=False),
     sa.Column("entity_kind", sa.String(32), nullable=False),
     sa.Column("entity_id", sa.Integer, nullable=False),
@@ -330,142 +330,285 @@ def _bulk_insert_records(
         session.connection().execute(version_changes_table.insert(), rows)
 
 
-def _coerce_json_list(raw: Any) -> list[Any]:
-    """JSON columns come back as either a parsed list or a string
-    depending on dialect (SQLite returns str for JSON; Postgres JSONB
-    returns the parsed value). Normalise to a Python list.
+def _shadow_rows_valid_at(
+    session: Session,
+    shadow_table: sa.Table,
+    fk_col_name: str,
+    fk_value: int,
+    tx: int,
+) -> list[dict[str, Any]]:
+    """Return the live state of *shadow_table* rows whose FK column
+    (``fk_col_name``) equals *fk_value*, as of transaction *tx*.
+
+    Uses Continuum's validity-strategy semantics: a row is "valid at tx"
+    when ``transaction_id <= tx`` AND (``end_transaction_id`` IS NULL OR
+    ``end_transaction_id`` > tx) AND it isn't a DELETE shadow.
+
+    The returned dicts mirror the live row's column set (no Continuum
+    bookkeeping columns), so they can be passed straight to the
+    natural-key diff helpers (``diff_dataset_columns`` etc.).
     """
-    if raw is None:
-        return []
-    if isinstance(raw, list):
-        return raw
-    if isinstance(raw, str):
-        try:
-            parsed = _superset_json.loads(raw)
-        except Exception:  # pylint: disable=broad-except
-            return []
-        return parsed if isinstance(parsed, list) else []
-    return []
+    fk_col = getattr(shadow_table.c, fk_col_name)
+    rows = (
+        session.connection()
+        .execute(
+            sa.select(shadow_table).where(
+                fk_col == fk_value,
+                shadow_table.c.transaction_id <= tx,
+                sa.or_(
+                    shadow_table.c.end_transaction_id.is_(None),
+                    shadow_table.c.end_transaction_id > tx,
+                ),
+                shadow_table.c.operation_type != 2,
+            )
+        )
+        .mappings()
+        .all()
+    )
+    # Coerce values to JSON-safe forms — raw shadow rows can carry
+    # ``UUID``, ``datetime``, ``bytes`` etc. that don't survive the
+    # ``version_changes.from_value/to_value`` JSON column write.
+    meta_cols = {"transaction_id", "end_transaction_id", "operation_type"}
+    return [
+        {k: _jsonable(v) for k, v in dict(row).items() if k not in meta_cols}
+        for row in rows
+    ]
 
 
-def _dataset_child_records_for_tx(
+def _affected_dataset_ids_at_tx(
+    session: Session, tx: int
+) -> set[int]:
+    """Datasets touched at *tx* — directly (parent shadow at tx) or
+    indirectly (column / metric shadow at tx)."""
+    # pylint: disable=import-outside-toplevel
+    from sqlalchemy_continuum import version_class
+
+    from superset.connectors.sqla.models import SqlaTable, SqlMetric, TableColumn
+
+    dataset_ids: set[int] = set()
+    parent_tbl = version_class(SqlaTable).__table__
+    for row in session.connection().execute(
+        sa.select(parent_tbl.c.id).where(parent_tbl.c.transaction_id == tx)
+    ):
+        dataset_ids.add(row[0])
+    for child_cls in (TableColumn, SqlMetric):
+        child_tbl = version_class(child_cls).__table__
+        for row in session.connection().execute(
+            sa.select(child_tbl.c.table_id).where(child_tbl.c.transaction_id == tx)
+        ):
+            if row[0] is not None:
+                dataset_ids.add(row[0])
+    return dataset_ids
+
+
+def _dataset_child_records_for_tx_from_shadows(
     session: Session, transaction_id: int
 ) -> dict[int, list[ChangeRecord]]:
-    """Compute column + metric diff records for each dataset that has
-    a ``dataset_snapshots`` row written for ``transaction_id``.
+    """Compute column + metric diff records for each dataset touched at
+    *transaction_id*, reading from Continuum shadow tables instead of
+    ``dataset_snapshots``.
 
-    Pre-state comes from the most recent ``dataset_snapshots`` row
-    strictly before ``transaction_id``; post-state from the current-tx
-    row. When no prior row exists (first save of a pre-existing
-    dataset that was brought under versioning, or first create under
-    versioning), the entity's child set is being captured for the
-    first time — no diff records emit (consistent with M4's
-    "baseline = zero records" rule at the child level).
+    For each dataset:
+    * Post-state = rows valid at ``transaction_id`` in
+      ``table_columns_version`` / ``sql_metrics_version``.
+    * Pre-state = rows valid at ``transaction_id - 1`` in the same
+      shadow tables.
+
+    With Continuum's validity-strategy semantics, "valid at tx N - 1"
+    is the state immediately before this transaction's effects (the
+    row that gets superseded at tx=N has ``end_transaction_id=N``, so
+    it satisfies ``end > N - 1``). Unrelated transactions between this
+    dataset's edits are transparent — they don't change validity for
+    this dataset's children.
+
+    First-edit case: when there is no prior tx (the dataset's earliest
+    shadow IS at *transaction_id*), pre-state is empty. We skip rather
+    than emit "Added X" for every column — same "baseline = zero
+    records" semantics as the snapshot path.
     """
     # pylint: disable=import-outside-toplevel
-    from superset.versioning.dataset_snapshots import dataset_snapshots_table
+    from sqlalchemy_continuum import version_class
 
-    try:
-        current_rows = (
-            session.connection()
-            .execute(
-                sa.select(
-                    dataset_snapshots_table.c.dataset_id,
-                    dataset_snapshots_table.c.columns_json,
-                    dataset_snapshots_table.c.metrics_json,
-                ).where(dataset_snapshots_table.c.transaction_id == transaction_id)
-            )
-            .mappings()
-            .all()
-        )
-    except sa.exc.OperationalError:
-        return {}
+    from superset.connectors.sqla.models import SqlMetric, TableColumn
+
+    cols_tbl = version_class(TableColumn).__table__
+    metrics_tbl = version_class(SqlMetric).__table__
 
     result: dict[int, list[ChangeRecord]] = {}
-    for row in current_rows:
-        dataset_id = row["dataset_id"]
-        prior = (
+    for dataset_id in _affected_dataset_ids_at_tx(session, transaction_id):
+        # Skip the very first transaction for this dataset (no pre-state).
+        prior_tx = (
             session.connection()
             .execute(
-                sa.select(
-                    dataset_snapshots_table.c.columns_json,
-                    dataset_snapshots_table.c.metrics_json,
+                sa.select(sa.func.max(cols_tbl.c.transaction_id))
+                .where(
+                    cols_tbl.c.table_id == dataset_id,
+                    cols_tbl.c.transaction_id < transaction_id,
                 )
-                .where(dataset_snapshots_table.c.dataset_id == dataset_id)
-                .where(dataset_snapshots_table.c.transaction_id < transaction_id)
-                .order_by(dataset_snapshots_table.c.transaction_id.desc())
-                .limit(1)
             )
-            .mappings()
-            .first()
+            .scalar()
         )
-        if prior is None:
+        if prior_tx is None:
+            # No prior column shadow — could still be a metric-only edit;
+            # check metrics shadow too.
+            prior_tx = (
+                session.connection()
+                .execute(
+                    sa.select(sa.func.max(metrics_tbl.c.transaction_id))
+                    .where(
+                        metrics_tbl.c.table_id == dataset_id,
+                        metrics_tbl.c.transaction_id < transaction_id,
+                    )
+                )
+                .scalar()
+            )
+        if prior_tx is None:
             continue
+
+        post_cols = _shadow_rows_valid_at(
+            session, cols_tbl, "table_id", dataset_id, transaction_id
+        )
+        pre_cols = _shadow_rows_valid_at(
+            session, cols_tbl, "table_id", dataset_id, prior_tx
+        )
+        post_metrics = _shadow_rows_valid_at(
+            session, metrics_tbl, "table_id", dataset_id, transaction_id
+        )
+        pre_metrics = _shadow_rows_valid_at(
+            session, metrics_tbl, "table_id", dataset_id, prior_tx
+        )
+
         records: list[ChangeRecord] = []
-        records.extend(
-            diff_dataset_columns(
-                _coerce_json_list(prior["columns_json"]),
-                _coerce_json_list(row["columns_json"]),
-            )
-        )
-        records.extend(
-            diff_dataset_metrics(
-                _coerce_json_list(prior["metrics_json"]),
-                _coerce_json_list(row["metrics_json"]),
-            )
-        )
+        records.extend(diff_dataset_columns(pre_cols, post_cols))
+        records.extend(diff_dataset_metrics(pre_metrics, post_metrics))
         if records:
             result[dataset_id] = records
     return result
 
 
-def _dashboard_child_records_for_tx(
-    session: Session, transaction_id: int
-) -> dict[int, list[ChangeRecord]]:
-    """Compute chart-membership diff records for each dashboard that
-    has a ``dashboard_snapshots`` row written for ``transaction_id``.
+def _affected_dashboard_ids_at_tx(session: Session, tx: int) -> set[int]:
+    """Dashboards touched at *tx* — directly (parent shadow at tx) or
+    indirectly (slice-membership shadow at tx)."""
+    # pylint: disable=import-outside-toplevel
+    from sqlalchemy_continuum import version_class
 
-    Same pre/post logic as :func:`_dataset_child_records_for_tx`.
+    from superset.models.dashboard import Dashboard
+
+    dashboard_ids: set[int] = set()
+    parent_tbl = version_class(Dashboard).__table__
+    for row in session.connection().execute(
+        sa.select(parent_tbl.c.id).where(parent_tbl.c.transaction_id == tx)
+    ):
+        dashboard_ids.add(row[0])
+
+    # M2M shadow: ``dashboard_slices_version`` is auto-generated by
+    # Continuum and lives in metadata — not a model class. Look it up
+    # from the metadata bag rather than via ``version_class``.
+    metadata = parent_tbl.metadata
+    m2m_tbl = metadata.tables.get("dashboard_slices_version")
+    if m2m_tbl is not None:
+        for row in session.connection().execute(
+            sa.select(m2m_tbl.c.dashboard_id).where(
+                m2m_tbl.c.transaction_id == tx
+            )
+        ):
+            if row[0] is not None:
+                dashboard_ids.add(row[0])
+    return dashboard_ids
+
+
+def _dashboard_slice_uuids_at_tx(
+    session: Session, dashboard_id: int, tx: int
+) -> list[str]:
+    """Slice UUIDs attached to *dashboard_id* as of *tx*, read by joining
+    ``dashboard_slices_version`` (M2M membership) against
+    ``slices_version`` (slice content).
+
+    Joining through both is necessary — and matches the same query
+    Continuum's M2M ``Reverter`` uses — because a slice that's
+    referenced by the M2M but has no slice-version row at this tx is
+    treated as "not yet versioned" and excluded.
+
+    Returns UUIDs (strings) so the result can be diffed by the existing
+    :func:`diff_dashboard_slices` helper, which keys on uuid.
     """
     # pylint: disable=import-outside-toplevel
-    from superset.versioning.dashboard_snapshots import dashboard_snapshots_table
+    from sqlalchemy_continuum import version_class
 
-    try:
-        current_rows = (
-            session.connection()
-            .execute(
-                sa.select(
-                    dashboard_snapshots_table.c.dashboard_id,
-                    dashboard_snapshots_table.c.slice_ids_json,
-                ).where(dashboard_snapshots_table.c.transaction_id == transaction_id)
+    from superset.models.slice import Slice
+
+    metadata = version_class(Slice).__table__.metadata
+    m2m_tbl = metadata.tables.get("dashboard_slices_version")
+    slices_tbl = version_class(Slice).__table__
+    if m2m_tbl is None:
+        return []
+
+    rows = (
+        session.connection()
+        .execute(
+            sa.select(slices_tbl.c.uuid).where(
+                slices_tbl.c.id == m2m_tbl.c.slice_id,
+                m2m_tbl.c.dashboard_id == dashboard_id,
+                m2m_tbl.c.transaction_id <= tx,
+                sa.or_(
+                    m2m_tbl.c.end_transaction_id.is_(None),
+                    m2m_tbl.c.end_transaction_id > tx,
+                ),
+                m2m_tbl.c.operation_type != 2,
+                slices_tbl.c.transaction_id <= tx,
+                sa.or_(
+                    slices_tbl.c.end_transaction_id.is_(None),
+                    slices_tbl.c.end_transaction_id > tx,
+                ),
+                slices_tbl.c.operation_type != 2,
             )
-            .mappings()
-            .all()
         )
-    except sa.exc.OperationalError:
-        return {}
+        .all()
+    )
+    return [str(r[0]) for r in rows if r[0] is not None]
+
+
+def _dashboard_child_records_for_tx_from_shadows(
+    session: Session, transaction_id: int
+) -> dict[int, list[ChangeRecord]]:
+    """Compute slice-membership diff records for each dashboard touched
+    at *transaction_id*, reading from Continuum shadow tables instead
+    of ``dashboard_snapshots``.
+
+    Same pre/post logic as
+    :func:`_dataset_child_records_for_tx_from_shadows`.
+    """
+    # pylint: disable=import-outside-toplevel
+    from sqlalchemy_continuum import version_class
+
+    from superset.models.dashboard import Dashboard
+
+    metadata = version_class(Dashboard).__table__.metadata
+    m2m_tbl = metadata.tables.get("dashboard_slices_version")
 
     result: dict[int, list[ChangeRecord]] = {}
-    for row in current_rows:
-        dashboard_id = row["dashboard_id"]
-        prior = (
-            session.connection()
-            .execute(
-                sa.select(dashboard_snapshots_table.c.slice_ids_json)
-                .where(dashboard_snapshots_table.c.dashboard_id == dashboard_id)
-                .where(dashboard_snapshots_table.c.transaction_id < transaction_id)
-                .order_by(dashboard_snapshots_table.c.transaction_id.desc())
-                .limit(1)
+    for dashboard_id in _affected_dashboard_ids_at_tx(session, transaction_id):
+        prior_tx = None
+        if m2m_tbl is not None:
+            prior_tx = (
+                session.connection()
+                .execute(
+                    sa.select(sa.func.max(m2m_tbl.c.transaction_id)).where(
+                        m2m_tbl.c.dashboard_id == dashboard_id,
+                        m2m_tbl.c.transaction_id < transaction_id,
+                    )
+                )
+                .scalar()
             )
-            .mappings()
-            .first()
-        )
-        if prior is None:
+        if prior_tx is None:
             continue
-        records = diff_dashboard_slices(
-            _coerce_json_list(prior["slice_ids_json"]),
-            _coerce_json_list(row["slice_ids_json"]),
+
+        post_uuids = _dashboard_slice_uuids_at_tx(
+            session, dashboard_id, transaction_id
         )
+        pre_uuids = _dashboard_slice_uuids_at_tx(session, dashboard_id, prior_tx)
+
+        records = diff_dashboard_slices(pre_uuids, post_uuids)
         if records:
             result[dashboard_id] = records
     return result
@@ -515,20 +658,32 @@ def _append_child_records_to_buffer(
 ) -> None:
     """Compute dataset + dashboard child-collection records + append to buffer.
 
-    Runs in ``after_flush`` so the snapshot tables have the current-tx
-    rows. The signal "this entity needs child diffing" is "a snapshot
-    row exists for this tx" — more robust than relying on
-    ``session.dirty`` to include the parent when only children moved.
+    Runs in ``after_flush`` so the shadow tables already have the
+    current-tx rows. Reads from Continuum shadow tables
+    (``table_columns_version`` / ``sql_metrics_version`` /
+    ``dashboard_slices_version`` / ``slices_version``) — the
+    ``dataset_snapshots`` and ``dashboard_snapshots`` JSON-blob path is
+    still populated by its listeners but no longer driving the diff.
     """
     try:
-        for dataset_id, records in _dataset_child_records_for_tx(
+        for dataset_id, records in _dataset_child_records_for_tx_from_shadows(
             session, tx_id
         ).items():
             buffer.setdefault(("dataset", dataset_id), []).extend(records)
-        for dashboard_id, records in _dashboard_child_records_for_tx(
-            session, tx_id
+        for dashboard_id, records in (
+            _dashboard_child_records_for_tx_from_shadows(session, tx_id)
         ).items():
             buffer.setdefault(("dashboard", dashboard_id), []).extend(records)
+
+        # Post-merge fold: when a dashboard save adds/removes charts,
+        # drop the redundant ``position_json.*`` records that mirror
+        # the membership change. See
+        # ``diff.fold_dashboard_layout_with_chart_changes``.
+        for key in list(buffer.keys()):
+            if key[0] == "dashboard":
+                buffer[key] = fold_dashboard_layout_with_chart_changes(buffer[key])
+                if not buffer[key]:
+                    del buffer[key]
     except Exception:  # pylint: disable=broad-except
         logger.exception("version_changes: child-diff failed for tx %s", tx_id)
 
@@ -578,57 +733,36 @@ def register_change_record_listener() -> None:
 
         uow = versioning_manager.units_of_work.get(session.connection())
         if uow is None or uow.current_transaction is None:
-            logger.info(
-                "SPIKE change_records: skipping flush — uow=%s "
-                "current_tx=%s buffer_keys=%s",
-                "None" if uow is None else "present",
-                None if uow is None else uow.current_transaction,
-                list(buffer.keys()),
-            )
             session.info[_BUFFER_KEY] = {}
             return
 
         tx_id = uow.current_transaction.id
-        logger.info(
-            "SPIKE change_records: flush tx=%s buffer_keys=%s",
-            tx_id,
-            list(buffer.keys()),
-        )
 
         # Skip if we've already written records for this tx (after_flush
         # can fire more than once per commit — e.g. autoflush from a
-        # mid-commit query, snapshot listeners that themselves flush).
-        # Without this guard the child-diff path would re-read the same
-        # snapshot pair and re-emit the same records, tripping the
-        # UNIQUE(transaction_id, entity_kind, entity_id, sequence)
-        # constraint on insert.
+        # mid-commit query). Without this guard the child-diff path would
+        # re-read the same shadow rows and re-emit the same records,
+        # tripping the UNIQUE(transaction_id, entity_kind, entity_id,
+        # sequence) constraint on insert.
         processed: set[int] = session.info.setdefault(_PROCESSED_TXS_KEY, set())
         if tx_id in processed:
             return
 
         _append_child_records_to_buffer(session, tx_id, buffer)
-        logger.info(
-            "SPIKE change_records: post-append tx=%s buffer=%s",
-            tx_id,
-            {k: len(v) for k, v in buffer.items()},
-        )
 
         if not buffer:
             # Don't mark tx as processed when nothing was inserted. A
             # later after_flush firing for the same tx may carry the
-            # records — e.g. when this entity's edit lands across two
+            # records — e.g. when an entity's edit lands across two
             # flushes (a child-only flush followed by a parent-dirty
-            # flush): the dataset_snapshot listener only writes its row
-            # in the parent-dirty flush, so the child-diff path can't
-            # find a snapshot to compare against until then.
+            # flush): the parent shadow only lands in the parent-dirty
+            # flush, so the child-diff path can't find a prior tx to
+            # compare against until then.
             session.info[_BUFFER_KEY] = {}
             return
 
         try:
             _bulk_insert_records(session, tx_id, buffer)
-            logger.info(
-                "SPIKE change_records: inserted records for tx=%s entities=%d",
-                tx_id, len(buffer))
         except OperationalError:
             # version_changes table missing (migration not yet applied).
             pass

@@ -80,69 +80,6 @@ def _persist_fixture_state() -> None:
     db.session.commit()
 
 
-class TestDatasetSnapshotCapture(SupersetTestCase):
-    """Dataset commits write a JSON snapshot of columns + metrics into
-    ``dataset_snapshots`` keyed on the Continuum transaction_id.
-    """
-
-    @pytest.fixture(autouse=True)
-    def _load_data(self, load_birth_names_dashboard_with_slices):  # noqa: PT004, F811
-        pass
-
-    def test_snapshot_captured_on_commit(self) -> None:
-        """A dataset save produces exactly one dataset_snapshots row for
-        that tx, containing every column + metric."""
-        import sqlalchemy as sa
-
-        _persist_fixture_state()
-        table: SqlaTable = (
-            db.session.query(SqlaTable)
-            .filter(SqlaTable.table_name == "birth_names")
-            .first()
-        )
-        assert table is not None
-        table_id = table.id
-        expected_column_names = sorted(c.column_name for c in table.columns)
-        expected_metric_names = sorted(m.metric_name for m in table.metrics)
-
-        original_description = table.description
-        table.description = "snapshot-capture-test"
-        db.session.commit()
-
-        # Find the snapshot for the most recent tx for this dataset.
-        ver_cls = version_class(SqlaTable)
-        latest_tx = (
-            db.session.query(ver_cls.transaction_id)
-            .filter(ver_cls.id == table_id)
-            .order_by(ver_cls.transaction_id.desc())
-            .limit(1)
-            .scalar()
-        )
-        assert latest_tx is not None
-
-        snap = db.session.execute(
-            sa.text(
-                "SELECT columns_json, metrics_json "
-                "FROM dataset_snapshots "
-                "WHERE dataset_id = :id AND transaction_id = :tx"
-            ),
-            {"id": table_id, "tx": latest_tx},
-        ).first()
-        assert snap is not None, "Expected a dataset_snapshots row for this save"
-
-        # pylint: disable=import-outside-toplevel
-        from superset.daos.version import _coerce_snapshot_list
-
-        columns = _coerce_snapshot_list(snap[0])
-        metrics = _coerce_snapshot_list(snap[1])
-        assert sorted(c["column_name"] for c in columns) == expected_column_names
-        assert sorted(m["metric_name"] for m in metrics) == expected_metric_names
-
-        # Cleanup
-        table.description = original_description
-        db.session.commit()
-
-
 class TestDatasetVersionListApi(SupersetTestCase):
     """T028 — GET /api/v1/dataset/<uuid>/versions/ endpoint."""
 

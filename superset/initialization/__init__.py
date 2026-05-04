@@ -641,56 +641,28 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         from superset.versioning.changes import (  # noqa: E402
             register_change_record_listener,
         )
-        from superset.versioning.dashboard_snapshots import (  # noqa: E402
-            register_dashboard_snapshot_listener,
-        )
-        from superset.versioning.dataset_snapshots import (  # noqa: E402
-            register_dataset_snapshot_listener,
-        )
 
-        # Note: TableColumn / SqlMetric are NOT Continuum-versioned; their
-        # history is captured as JSON snapshots via
-        # register_dataset_snapshot_listener() below.
-        versioned_models: list[type] = []
+        # All versioned models — Dashboard / Slice / SqlaTable plus their
+        # children (TableColumn / SqlMetric) and the dashboard_slices
+        # M2M — go through Continuum's shadow tables. The JSON-snapshot
+        # path that previously backed dataset / dashboard child diffs
+        # has been removed (sc-103156 spike: full Continuum).
         for model_cls in (Dashboard, Slice, SqlaTable):
             try:
                 version_class(model_cls)  # ensure Continuum wired this model
                 VERSIONED_MODELS.append(model_cls)
-                versioned_models.append(model_cls)
             except Exception:  # pylint: disable=broad-except  # noqa: S110
                 pass
 
         register_baseline_listener()
-        register_dataset_snapshot_listener()
-        register_dashboard_snapshot_listener()
         register_change_record_listener()
 
-
-        # Retention-prune listener: after each commit, delete oldest version rows
-        # that exceed SUPERSET_VERSION_HISTORY_MAX_VERSIONS (FR-007).
-        versioned_model_set = frozenset(versioned_models)
-
-        @event.listens_for(db.session, "after_commit")
-        def _prune_version_history(session: Session) -> None:
-            # pylint: disable=import-outside-toplevel
-            from sqlalchemy import inspect as sa_inspect
-
-            from superset.daos.version import VersionDAO
-
-            for obj in list(session.identity_map.values()):
-                if type(obj) not in versioned_model_set:
-                    continue
-                # Read id via instance_state.key to avoid triggering a lazy
-                # load on expired attributes: the session is in 'committed'
-                # state during after_commit and cannot emit SQL.
-                state = sa_inspect(obj)
-                entity_id = state.key[1][0] if state.key else None
-                if entity_id is None:
-                    continue
-                try:
-                    VersionDAO.prune_versions(type(obj), entity_id)
-                except Exception:  # pylint: disable=broad-except  # noqa: S110
-                    pass  # prune_versions logs internally
+        # Retention is time-based and runs out-of-band as a Celery beat
+        # task — see ``superset/tasks/version_history_retention.py``
+        # and the ``version_history.prune_old_versions`` entry in
+        # ``CELERYBEAT_SCHEDULE`` (``superset/config.py``). The previous
+        # synchronous after_commit listener was retired so retention
+        # work doesn't add latency to user saves.
 
     def init_app_in_ctx(self) -> None:
         """

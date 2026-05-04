@@ -1340,10 +1340,16 @@ DATETIME_FORMAT_DETECTION_SAMPLE_SIZE = 1000
 # The limit for the Superset Meta DB when the feature flag ENABLE_SUPERSET_META_DB is on
 SUPERSET_META_DB_LIMIT: int | None = 1000
 
-# Maximum number of versions retained per entity in version history.
-# When the limit is reached the oldest version is pruned on each save.
-# The live (current) version is never pruned.
-SUPERSET_VERSION_HISTORY_MAX_VERSIONS: int = 25
+# Retention window (days) for entity version history. Version rows
+# whose owning ``version_transaction.issued_at`` is older than this
+# value are pruned by the ``version_history.prune_old_versions``
+# Celery beat task (registered below in ``CeleryConfig.beat_schedule``).
+# The live row (``end_transaction_id IS NULL``) and baseline rows
+# (``operation_type=0``) are never pruned. ``0`` disables pruning.
+# Read from environment variable of the same name.
+SUPERSET_VERSION_HISTORY_RETENTION_DAYS: int = int(
+    os.environ.get("SUPERSET_VERSION_HISTORY_RETENTION_DAYS", "30")
+)
 
 # Adds a warning message on sqllab save query and schedule query modals.
 SQLLAB_SAVE_WARNING_MESSAGE = None
@@ -1408,6 +1414,13 @@ class CeleryConfig:  # pylint: disable=too-few-public-methods
         "reports.prune_log": {
             "task": "reports.prune_log",
             "schedule": crontab(minute=0, hour=0),
+        },
+        # Entity version-history retention. Daily at 03:00; the task
+        # itself short-circuits when SUPERSET_VERSION_HISTORY_RETENTION_DAYS
+        # is 0 (disabled).
+        "version_history.prune_old_versions": {
+            "task": "version_history.prune_old_versions",
+            "schedule": crontab(minute=0, hour=3),
         },
         # Uncomment to enable pruning of the query table
         # "prune_query": {
