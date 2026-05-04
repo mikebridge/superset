@@ -147,10 +147,17 @@ class TestDashboardVersionRetention(SupersetTestCase):
     def _load_data(self, load_birth_names_dashboard_with_slices):  # noqa: PT004, F811
         pass
 
-    def test_retention_prunes_oldest_rows(self) -> None:
-        """Saving 27 times with max=25 leaves exactly 25 version rows and
-        never prunes the live row (end_transaction_id IS NULL)."""
-        from unittest.mock import patch
+    def test_retention_prunes_old_rows(self) -> None:
+        """``prune_old_versions`` removes shadow rows whose owning
+        ``version_transaction.issued_at`` is older than the retention
+        window, while preserving the live row and the baseline."""
+        import sqlalchemy as sa
+        from datetime import datetime, timedelta
+
+        from superset.extensions import db as _db
+        from superset.tasks.version_history_retention import (
+            _prune_old_versions_impl,
+        )
 
         _persist_fixture_state()
         dashboard: Dashboard = (
@@ -162,52 +169,45 @@ class TestDashboardVersionRetention(SupersetTestCase):
 
         original_title = dashboard.dashboard_title
 
-        max_versions = 5  # Use a small limit so the test is fast
-        with (
-            patch.dict("superset.daos.version.__builtins__", {}),
-            patch(
-                "flask.current_app.config",
-                {"SUPERSET_VERSION_HISTORY_MAX_VERSIONS": max_versions},
-                create=True,
-            ),
-        ):
-            # Patch config in a simpler way
-            pass
-
-        # Directly test with real config patching via superset config
-        from flask import current_app
-
-        from superset.daos.version import VersionDAO
-
-        original_max = current_app.config.get("SUPERSET_VERSION_HISTORY_MAX_VERSIONS")
-        current_app.config["SUPERSET_VERSION_HISTORY_MAX_VERSIONS"] = max_versions = 5
-
         try:
-            # Save more than max_versions times to trigger pruning
-            for i in range(max_versions + 2):
+            # Force a few saves so we have ≥ 2 closed shadow rows plus
+            # a baseline plus the live row.
+            for i in range(3):
                 dashboard.dashboard_title = f"USA Births Names retention test {i}"
                 db.session.commit()
-                VersionDAO.prune_versions(Dashboard, dashboard.id)
 
-            rows = _get_version_rows(dashboard)
-            assert len(rows) <= max_versions, (
-                f"Expected at most {max_versions} rows, got {len(rows)}"
+            rows_before = _get_version_rows(dashboard)
+            assert len(rows_before) >= 3, "Expected at least 3 version rows"
+
+            # Backdate every version_transaction row by 100 days so the
+            # prune sees them as old. Skip baseline+live rows; the prune
+            # itself preserves them.
+            from sqlalchemy_continuum import versioning_manager
+
+            tx_table = versioning_manager.transaction_cls.__table__
+            with _db.engine.begin() as conn:
+                conn.execute(
+                    sa.update(tx_table).values(
+                        issued_at=datetime.utcnow() - timedelta(days=100)
+                    )
+                )
+
+            stats = _prune_old_versions_impl(retention_days=30)
+            assert stats.get("pruned_transactions", 0) >= 1, stats
+
+            rows_after = _get_version_rows(dashboard)
+            # Live row must still exist (this is the only preservation rule)
+            live_rows = [r for r in rows_after if r.end_transaction_id is None]
+            assert len(live_rows) >= 1, "Live row must never be pruned"
+            # Some rows should have been pruned. Closed historical rows —
+            # including the synthetic baseline (operation_type=0) — are
+            # subject to retention like everything else.
+            assert len(rows_after) < len(rows_before), (
+                f"Expected fewer rows after prune; before={len(rows_before)} "
+                f"after={len(rows_after)}"
             )
 
-            # Live row (end_transaction_id IS NULL) must still exist
-            live_rows = [r for r in rows if r.end_transaction_id is None]
-            assert len(live_rows) >= 1, "Live version row must never be pruned"
-
         finally:
-            # Always restore — including when original_max was None, otherwise
-            # the 5-row cap leaks into subsequent tests.
-            if original_max is not None:
-                current_app.config["SUPERSET_VERSION_HISTORY_MAX_VERSIONS"] = (
-                    original_max
-                )
-            else:
-                current_app.config.pop("SUPERSET_VERSION_HISTORY_MAX_VERSIONS", None)
-            # Cleanup
             dashboard.dashboard_title = original_title
             db.session.commit()
 

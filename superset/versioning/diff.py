@@ -451,17 +451,22 @@ def diff_json_field(
     field_name: str,
     from_value: Any,
     to_value: Any,
+    *,
+    exclude_keys: frozenset[str] = frozenset(),
 ) -> list[ChangeRecord]:
     """Diff a TEXT column that stores a JSON dict, emitting one record
     per top-level key whose value changed.
 
-    Used for ``Dashboard.json_metadata`` and ``Dashboard.position_json``:
-    saving these blobs verbatim into ``from_value`` / ``to_value`` would
-    swamp the change log with multi-KB strings on every save. Walking
-    the parsed dict at the top level reduces noise to "what actually
-    changed" — ``map_label_colors`` was injected, ``chartsInScope``
-    was reshaped, etc. — without needing the full Phase 2 structural
-    diff that would understand ``position_json``'s nested layout.
+    Used for ``Dashboard.json_metadata`` (``position_json`` has its
+    own structural diff via :func:`diff_dashboard_layout`). Saving the
+    blob verbatim into ``from_value`` / ``to_value`` would swamp the
+    change log with multi-KB strings on every save; walking the parsed
+    dict at the top level reduces noise to "what changed".
+
+    *exclude_keys* names sub-keys that are frontend-derived /
+    auto-stamped on save and don't carry user-authored signal. Same
+    rationale as the ``audit`` parameter on
+    :func:`scalar_fields_for` for the parent-column level.
 
     Path is ``[field_name, key]``, mirroring ``diff_slice_params``'s
     ``["params", key]`` shape so renderers can use a single addressing
@@ -471,6 +476,8 @@ def diff_json_field(
     to_p = _coerce_params(to_value)
     records: list[ChangeRecord] = []
     for key in sorted(set(from_p) | set(to_p)):
+        if key in exclude_keys:
+            continue
         from_v = from_p.get(key)
         to_v = to_p.get(key)
         if _values_equivalent(from_v, to_v):
@@ -486,11 +493,231 @@ def diff_json_field(
     return records
 
 
-# Dashboard text columns that hold JSON dicts. Diffed structurally by
-# :func:`diff_json_field` rather than as opaque scalars to keep change
-# records readable. Listener wiring excludes these from the scalar set
-# via ``scalar_fields_for(Dashboard, special=...)``.
-_DASHBOARD_JSON_FIELDS: tuple[str, ...] = ("json_metadata", "position_json")
+# json_metadata sub-keys that the frontend auto-stamps / auto-derives
+# on save. They mirror dashboard membership and chart inventory, not
+# user-authored content, so they noise up the change log without
+# carrying intent. The records produced for these keys can be ~50KB
+# (full label-colour dict) for a one-chart save.
+#
+#   chart_configuration:        per-chart cross-filter scope state,
+#                               re-derived when charts are added/removed.
+#   global_chart_configuration: dashboard-wide filter scope; the
+#                               ``chartsInScope`` list mirrors live
+#                               dashboard membership.
+#   map_label_colors:           label → colour map, re-stamped on save
+#                               from currently-visible filter values.
+#   show_chart_timestamps:      frontend toggle, defaults applied on
+#                               save when missing.
+#   color_namespace:            scoped colour-scheme namespace, frontend-
+#                               derived from the chart set.
+_DASHBOARD_JSON_METADATA_AUDIT_KEYS: frozenset[str] = frozenset(
+    {
+        "chart_configuration",
+        "global_chart_configuration",
+        "map_label_colors",
+        "show_chart_timestamps",
+        "color_namespace",
+    }
+)
+
+
+# Layout component types and how they map to record ``kind`` strings.
+# ``HEADER_ID`` is excluded — that's the dashboard's title bar, mirrored
+# from ``dashboard_title``. ``ROOT_ID`` and ``GRID_ID`` are structural
+# singletons whose only deltas are children lists, which we infer from
+# the moves of the children themselves.
+_LAYOUT_TYPE_TO_KIND: dict[str, str] = {
+    "CHART": "chart",
+    "ROW": "row",
+    "COLUMN": "column",
+    "TAB": "tab",
+    "TABS": "tabs",
+    "HEADER": "header",
+    "MARKDOWN": "markdown",
+    "DIVIDER": "divider",
+}
+
+# Layout components we never emit records for: ROOT_ID is the layout
+# root (always present, never moves); GRID_ID is the singleton vertical
+# stack inside ROOT_ID; HEADER_ID is the dashboard's title bar (already
+# covered by the ``dashboard_title`` scalar field).
+_LAYOUT_SUPPRESSED_IDS: frozenset[str] = frozenset(
+    {"ROOT_ID", "GRID_ID", "HEADER_ID"}
+)
+
+
+def _layout_component_label(node: dict[str, Any]) -> str | None:
+    """Extract a human-readable label from a layout node, when one
+    exists. Used to build the ``from_value`` / ``to_value`` payload so
+    the UI can render messages like "Added chart 'Foo'" without
+    needing to fetch related entities.
+    """
+    meta = node.get("meta") or {}
+    if not isinstance(meta, dict):
+        return None
+    for key in ("sliceName", "label", "text"):
+        value = meta.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _layout_node_payload(node: dict[str, Any]) -> dict[str, Any]:
+    """Minimal payload describing a layout node — enough for the UI
+    to render the change without dragging the full layout snippet
+    (which can be ~1KB per row when CHART nodes carry colour configs).
+    """
+    meta = node.get("meta") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    payload: dict[str, Any] = {"id": node.get("id"), "type": node.get("type")}
+    label = _layout_component_label(node)
+    if label is not None:
+        payload["name"] = label
+    chart_id = meta.get("chartId")
+    if chart_id is not None:
+        payload["chartId"] = chart_id
+    # ``uuid`` (slice uuid for CHART nodes) lets the M2M-vs-layout
+    # dedupe in :func:`fold_dashboard_layout_with_chart_changes`
+    # match on the same key — :func:`diff_dashboard_slices` keys its
+    # records by uuid, not chartId.
+    slice_uuid = meta.get("uuid")
+    if slice_uuid is not None:
+        payload["uuid"] = slice_uuid
+    return payload
+
+
+def _layout_parent_id(node: dict[str, Any]) -> Any:
+    """The immediate-parent node id for a layout component — the last
+    entry in ``parents``. Used to detect moves: same id, different
+    parent."""
+    parents = node.get("parents") or []
+    if not isinstance(parents, list) or not parents:
+        return None
+    return parents[-1]
+
+
+def _meta_excluding_position(node: dict[str, Any]) -> dict[str, Any]:
+    """Meta dict with ``parents``-equivalent positional bits removed
+    so two nodes that differ ONLY in where they sit compare equal at
+    the meta level. Move detection uses ``parents`` directly; this is
+    for "edit" (meta change) detection."""
+    meta = node.get("meta") or {}
+    return dict(meta) if isinstance(meta, dict) else {}
+
+
+def diff_dashboard_layout(
+    pre: Any,
+    post: Any,
+) -> list[ChangeRecord]:
+    """Structural diff of a dashboard's ``position_json``, emitting one
+    record per logical layout action.
+
+    Walks both sides keyed on the component ``id`` (e.g.
+    ``"CHART-mkPZLOnWCElgL0Udp1gVK"``):
+
+    * id present only in *post* → ``op=add``, ``from_value=None``,
+      ``to_value=<minimal payload>``
+    * id present only in *pre*  → ``op=remove``, payload swapped
+    * id in both, ``parents`` differs → ``op=move``, payloads carry
+      old + new parent
+    * id in both, parents equal, ``meta`` differs → ``op=edit``,
+      payloads carry old + new meta
+    * id in both, equal → no record
+
+    The ``operation_type``-style verb is encoded in
+    ``path[0]`` as ``["add"|"remove"|"move"|"edit", <component-kind>,
+    <component-id>]`` so the UI's path-based renderer can read it
+    without inspecting from/to.
+
+    ``ROOT_ID`` / ``GRID_ID`` / ``HEADER_ID`` are suppressed (see
+    :data:`_LAYOUT_SUPPRESSED_IDS`).
+    """
+    pre_dict = _coerce_params(pre)
+    post_dict = _coerce_params(post)
+
+    pre_nodes: dict[str, dict[str, Any]] = {
+        k: v
+        for k, v in pre_dict.items()
+        if isinstance(v, dict) and k not in _LAYOUT_SUPPRESSED_IDS
+    }
+    post_nodes: dict[str, dict[str, Any]] = {
+        k: v
+        for k, v in post_dict.items()
+        if isinstance(v, dict) and k not in _LAYOUT_SUPPRESSED_IDS
+    }
+
+    records: list[ChangeRecord] = []
+    all_ids = sorted(set(pre_nodes) | set(post_nodes))
+    for node_id in all_ids:
+        pre_node = pre_nodes.get(node_id)
+        post_node = post_nodes.get(node_id)
+
+        node_for_kind = post_node or pre_node or {}
+        kind = _LAYOUT_TYPE_TO_KIND.get(node_for_kind.get("type") or "")
+        if kind is None:
+            continue  # unknown component type — skip rather than emit garbage
+
+        if pre_node is None and post_node is not None:
+            records.append(
+                ChangeRecord(
+                    kind=kind,
+                    path=["add", kind, node_id],
+                    from_value=None,
+                    to_value=_layout_node_payload(post_node),
+                )
+            )
+            continue
+        if post_node is None and pre_node is not None:
+            records.append(
+                ChangeRecord(
+                    kind=kind,
+                    path=["remove", kind, node_id],
+                    from_value=_layout_node_payload(pre_node),
+                    to_value=None,
+                )
+            )
+            continue
+
+        # Both present — check move first, then edit.
+        assert pre_node is not None and post_node is not None
+        pre_parent = _layout_parent_id(pre_node)
+        post_parent = _layout_parent_id(post_node)
+        if pre_parent != post_parent:
+            records.append(
+                ChangeRecord(
+                    kind=kind,
+                    path=["move", kind, node_id],
+                    from_value={
+                        **_layout_node_payload(pre_node),
+                        "parent": pre_parent,
+                    },
+                    to_value={
+                        **_layout_node_payload(post_node),
+                        "parent": post_parent,
+                    },
+                )
+            )
+            continue
+
+        pre_meta = _meta_excluding_position(pre_node)
+        post_meta = _meta_excluding_position(post_node)
+        if pre_meta != post_meta:
+            records.append(
+                ChangeRecord(
+                    kind=kind,
+                    path=["edit", kind, node_id],
+                    from_value={
+                        **_layout_node_payload(pre_node),
+                        "meta": pre_meta,
+                    },
+                    to_value={
+                        **_layout_node_payload(post_node),
+                        "meta": post_meta,
+                    },
+                )
+            )
+    return records
 
 
 def diff_dashboard(
@@ -509,9 +736,63 @@ def diff_dashboard(
     fall through to ``kind="field"`` records keyed by sub-key.
     """
     records = diff_scalar_fields(pre, post, fields=fields)
-    for field in _DASHBOARD_JSON_FIELDS:
-        records.extend(diff_json_field(field, pre.get(field), post.get(field)))
+    records.extend(
+        diff_json_field(
+            "json_metadata",
+            pre.get("json_metadata"),
+            post.get("json_metadata"),
+            exclude_keys=_DASHBOARD_JSON_METADATA_AUDIT_KEYS,
+        )
+    )
+    records.extend(
+        diff_dashboard_layout(pre.get("position_json"), post.get("position_json"))
+    )
     return records
+
+
+def fold_dashboard_layout_with_chart_changes(
+    records: list[ChangeRecord],
+) -> list[ChangeRecord]:
+    """When a dashboard save adds/removes charts, the ``slices`` M2M
+    diff and the layout diff each emit a record for the same logical
+    action. Drop the M2M ``kind="chart"`` records — the layout-side
+    record carries more information (chart name, parent container).
+
+    The matching is by slice uuid: ``diff_dashboard_slices`` produces
+    records with path ``["slices", <slice-uuid>]``; the layout
+    payloads carry the same uuid (sourced from
+    ``position_json.CHART-x.meta.uuid``). We dedupe on that key.
+
+    Called from the change-records listener after the M2M and layout
+    diffs are both merged into the per-entity buffer.
+    """
+    layout_added_uuids: set[Any] = set()
+    layout_removed_uuids: set[Any] = set()
+    for r in records:
+        if r.kind != "chart" or len(r.path) < 3:
+            continue
+        verb = r.path[0]
+        if verb == "add" and isinstance(r.to_value, dict):
+            uuid = r.to_value.get("uuid")
+            if uuid is not None:
+                layout_added_uuids.add(uuid)
+        elif verb == "remove" and isinstance(r.from_value, dict):
+            uuid = r.from_value.get("uuid")
+            if uuid is not None:
+                layout_removed_uuids.add(uuid)
+
+    def _is_redundant_m2m_record(r: ChangeRecord) -> bool:
+        # M2M slice records have path ["slices", uuid] (length 2).
+        if r.kind != "chart" or len(r.path) != 2 or r.path[0] != "slices":
+            return False
+        slice_uuid = r.path[1]
+        if r.from_value is None and r.to_value is not None:
+            return slice_uuid in layout_added_uuids
+        if r.to_value is None and r.from_value is not None:
+            return slice_uuid in layout_removed_uuids
+        return False
+
+    return [r for r in records if not _is_redundant_m2m_record(r)]
 
 
 def diff_dataset(

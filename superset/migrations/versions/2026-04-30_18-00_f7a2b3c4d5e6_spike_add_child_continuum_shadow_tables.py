@@ -158,45 +158,31 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     # dashboard_slices_version (M2M association)
     #
-    # The live ``dashboard_slices`` table on master carries a surrogate
-    # ``id`` PK (it's been there since the original schema — not a spike
-    # addition). Continuum auto-mirrors the live columns into the shadow
-    # Table object at ``make_versioned()`` time, so the shadow's
-    # SQLAlchemy metadata always includes ``id``. We can't easily strip
-    # it from the metadata, so the DB column has to exist.
+    # The live ``dashboard_slices`` table is reshaped by sc-105349 to a
+    # composite PK on ``(dashboard_id, slice_id)`` — no surrogate ``id``.
+    # Continuum auto-mirrors the live columns into the shadow Table at
+    # ``make_versioned()`` time, so the shadow's SQLAlchemy metadata
+    # also has no ``id``. The DB shadow PK is the natural composite key
+    # plus Continuum's bookkeeping (``transaction_id``, ``operation_type``);
+    # ``operation_type`` is included because a single transaction can in
+    # principle produce both INSERT and DELETE shadows for the same
+    # ``(dashboard_id, slice_id)`` pair (slice removed and re-added in
+    # one save).
     #
-    # Continuum's M2M tracking
-    # (``manager.track_association_operations``) builds the shadow INSERT
-    # as ``**params + transaction_id + operation_type``, where ``params``
-    # comes from the live ``dashboard_slices`` INSERT — which doesn't
-    # carry the auto-generated ``id`` at INSERT time (the DB fills it
-    # from a sequence). A NOT-NULL ``id`` without a sequence default
-    # would deterministically raise on every dashboard membership change.
-    #
-    # The fix: declare ``id`` as ``BigInteger(autoincrement=True,
-    # nullable=False)`` with an explicit Sequence default. Continuum's
-    # INSERT lands without ``id``; the sequence supplies one. The PK
-    # follows Continuum's standard (``id``, ``transaction_id``) so
-    # repeated edits produce one shadow row per (membership change, tx).
+    # If sc-105349 is removed from the stack, the live table reverts to
+    # carrying its surrogate ``id`` and this migration would need to
+    # match — see ``spike-continuum-restore.md`` "Branch maintenance".
     # ------------------------------------------------------------------
     op.create_table(
         "dashboard_slices_version",
-        sa.Column(
-            "id",
-            sa.BigInteger(),
-            sa.Sequence("dashboard_slices_version_id_seq"),
-            autoincrement=True,
-            nullable=False,
-            server_default=sa.text(
-                "nextval('dashboard_slices_version_id_seq'::regclass)"
-            ),
-        ),
         sa.Column("dashboard_id", sa.Integer(), nullable=False),
         sa.Column("slice_id", sa.Integer(), nullable=False),
         sa.Column("transaction_id", sa.BigInteger(), nullable=False),
         sa.Column("end_transaction_id", sa.BigInteger(), nullable=True),
         sa.Column("operation_type", sa.SmallInteger(), nullable=False),
-        sa.PrimaryKeyConstraint("id", "transaction_id"),
+        sa.PrimaryKeyConstraint(
+            "dashboard_id", "slice_id", "transaction_id", "operation_type"
+        ),
         sa.ForeignKeyConstraint(
             ["transaction_id"],
             ["version_transaction.id"],

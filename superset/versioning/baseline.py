@@ -152,20 +152,6 @@ def _insert_child_baseline_rows(
         .mappings()
         .all()
     )
-    # SPIKE TRACE: log a snapshot of what we read from DB. If these values
-    # are post-edit, an earlier silent flush already pushed the UPDATE to
-    # the DB before our baseline listener got to read pre-edit state.
-    sample_keys = ("id", "column_name", "expression", "metric_name")
-    sample = [
-        {k: r.get(k) for k in sample_keys if k in r} for r in rows
-    ]
-    logger.info(
-        "baseline_listener: read %d rows from %s for parent id=%s sample=%s",
-        len(rows),
-        child_table.name,
-        parent_obj.id,
-        sample,
-    )
     if not rows:
         return
 
@@ -337,33 +323,6 @@ def register_baseline_listener() -> None:
         if not VERSIONED_MODELS:
             return
 
-        # SPIKE TRACE: log every flush including the full dirty/new/deleted
-        # composition so we can spot silent flushes that update children
-        # before the parent's baseline listener fires.
-        dirty_versioned = [
-            o for o in session.dirty if type(o) in VERSIONED_MODELS
-        ]
-        new_versioned = [o for o in session.new if type(o) in VERSIONED_MODELS]
-        all_dirty_types = sorted(
-            {type(o).__name__ for o in session.dirty}
-        )
-        all_new_types = sorted({type(o).__name__ for o in session.new})
-        all_deleted_types = sorted({type(o).__name__ for o in session.deleted})
-        logger.info(
-            "baseline_listener: flush triggered. "
-            "dirty_versioned=%s new_versioned=%s "
-            "total_new=%d (types=%s) total_dirty=%d (types=%s) "
-            "total_deleted=%d (types=%s)",
-            [(type(o).__name__, getattr(o, "id", None)) for o in dirty_versioned],
-            [(type(o).__name__, getattr(o, "id", None)) for o in new_versioned],
-            len(session.new),
-            all_new_types,
-            len(session.dirty),
-            all_dirty_types,
-            len(session.deleted),
-            all_deleted_types,
-        )
-
         # Build the set of parents to baseline: explicit dirty versioned
         # parents PLUS parents reachable from dirty/new/deleted children.
         parents_to_check: dict[int, Any] = {}  # id(obj) → obj (dedupe by identity)
@@ -417,14 +376,6 @@ def register_baseline_listener() -> None:
                 )
                 continue
 
-            logger.info(
-                "baseline_listener: %s id=%s shadow_count=%d → %s",
-                type(obj).__name__,
-                getattr(obj, "id", None),
-                count,
-                "FIRING baseline" if count == 0 else "skip (already has shadows)",
-            )
-
             if count == 0:
                 try:
                     # no_autoflush here too: prevents ``session.connection()``
@@ -434,11 +385,11 @@ def register_baseline_listener() -> None:
                     with session.no_autoflush:
                         tx_id = _insert_baseline_row(session, obj, version_table)
                         if tx_id is not None:
-                            # SPIKE: also baseline the parent's child collections
+                            # Also baseline the parent's child collections
                             # so Continuum's Reverter has data to roll back to
                             # for children that predate versioning.
                             _baseline_children_for_parent(session, obj, tx_id)
-                            logger.info(
+                            logger.debug(
                                 "baseline_listener: inserted baseline tx_id=%s "
                                 "for %s id=%s",
                                 tx_id,

@@ -34,7 +34,11 @@ from alembic import op
 from sqlalchemy_utils import UUIDType
 
 revision = "56cd24c07170"
-down_revision = "ce6bd21901ab"
+# Stacked on sc-105349-composite-association-pks (2bee73611e32) so the
+# Continuum shadow tables this migration creates can mirror the
+# composite-PK shape of the live association tables. If sc-105349
+# is removed from the stack, this should be reverted to "ce6bd21901ab".
+down_revision = "2bee73611e32"
 
 
 def upgrade() -> None:
