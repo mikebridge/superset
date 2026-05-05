@@ -38,9 +38,26 @@ Saves of charts, dashboards, and datasets now automatically produce a version hi
 
 `<version_uuid>` is a deterministic `UUIDv5` derived from the entity's UUID and the Continuum transaction id — stable across replicas and retention pruning. Authorisation reuses the resource's existing `can_write` permission; workspace admins can list/restore any entity.
 
+**Version response shape — `changes` array:**
+
+Each entry returned by `GET /api/v1/{resource}/<uuid>/versions/` and `GET .../versions/<version_uuid>/` includes a `changes` array describing what changed relative to the previous version:
+
+```json
+"changes": [
+  {"kind": "field", "path": "slice_name", "from_value": "Old", "to_value": "New"}
+]
+```
+
+The array is empty for baseline (`operation_type=0`) transactions. `kind` enumerates structured record types (`field`, layout-walker records for dashboards, dataset child diffs for `TableColumn` / `SqlMetric`); `path` is a dotted JSON-pointer-style locator; `from_value` / `to_value` are JSON-safe scalars or compact records.
+
+**Save-response and ETag headers:**
+
+- Save responses (`PUT /api/v1/{resource}/<pk>`) include `old_version_uuid` and `new_version_uuid` body fields so the client can correlate a save with its resulting version row.
+- All entity GETs (`GET /api/v1/{chart,dashboard,dataset}/<pk>`), version-list GETs, single-version GETs, and save responses emit an `ETag: "<version_uuid>"` header reflecting the entity's current live version. CORS responses set `Access-Control-Expose-Headers: ETag` so cross-origin clients can read it. **No `If-Match` enforcement in v1** — `ETag` is informational; concurrent-edit detection is deferred to a follow-up SIP.
+
 **Behaviour changes on save:**
 
-- Every save of a chart, dashboard, or dataset produces one new version row. Rows preserve the full post-save state (scalar fields for all three entity types; `TableColumn` / `SqlMetric` children for datasets; `dashboard_slices` chart membership for dashboards — the last two via purpose-built JSON snapshot tables, `dataset_snapshots` and `dashboard_snapshots`, documented in ADR-004 and ADR-005 in the ticket's spec folder).
+- Every save of a chart, dashboard, or dataset produces one new version row. Rows preserve the full post-save state (scalar fields for all three entity types; `TableColumn` / `SqlMetric` children for datasets; `dashboard_slices` chart membership for dashboards — children versioned via SQLAlchemy-Continuum shadow tables `table_columns_version`, `sql_metrics_version`, and `dashboard_slices_version`).
 - First save after an entity already exists in the DB creates a retroactive baseline version so the UI can show "what this looked like before I edited it."
 - Tags, owners, and roles are **not** versioned in v1 (ADR-005). A restore leaves those at their live values.
 
@@ -48,12 +65,12 @@ Saves of charts, dashboards, and datasets now automatically produce a version hi
 
 | Key | Default | Purpose |
 |---|---|---|
-| `SUPERSET_VERSION_HISTORY_MAX_VERSIONS` | `25` | Maximum versions retained per entity. Synchronous prune runs after each save; the live version is never pruned. |
+| `SUPERSET_VERSION_HISTORY_RETENTION_DAYS` | `30` | Versions older than this many days are pruned by a nightly Celery beat task (`superset.tasks.version_history_retention.prune_old_versions`). Each entity's live row (`end_transaction_id IS NULL`) is always preserved; closed historical rows including the baseline age out with the rest. Set to `0` to disable retention entirely. |
 
 **Impact on external integrations:**
 
-- Five new tables — `dashboards_version`, `slices_version`, `tables_version` (Continuum parent shadow tables), plus `dataset_snapshots` and `dashboard_snapshots` (JSON snapshot tables for complex child state) — and one shared `version_transaction` table are populated on every save. External tooling that queries Superset's DB directly will see writes to these tables proportional to save traffic.
-- No existing endpoints change request or response shape.
+- New tables populated on every save — `dashboards_version`, `slices_version`, `tables_version` (parent shadow tables for the three entity types), `table_columns_version`, `sql_metrics_version`, `dashboard_slices_version` (child shadow tables), plus the shared `version_transaction` and `version_changes` tables. External tooling that queries Superset's DB directly will see writes to these tables proportional to save traffic.
+- Existing entity endpoints (`GET`/`PUT /api/v1/{chart,dashboard,dataset}/<pk>`) gain an `ETag` response header and the save response gains `old_version_uuid` / `new_version_uuid` body fields. No existing fields are removed or repurposed.
 - Version capture is always active — no feature flag.
 
 ### Granular Export Controls

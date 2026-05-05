@@ -525,7 +525,13 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
         add_extra_log_payload(
             dashboard_id=dash.id, action=f"{self.__class__.__name__}.get"
         )
-        return self.response(200, result=result)
+        from superset.daos.version import VersionDAO
+        from superset.versioning.etag import set_version_etag
+
+        return set_version_etag(
+            self.response(200, result=result),
+            VersionDAO.current_live_version_uuid(Dashboard, dash.id, dash.uuid),
+        )
 
     @expose("/<id_or_slug>/datasets", methods=("GET",))
     @protect()
@@ -876,6 +882,9 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
                 old_version_uuid=str(old_version_uuid) if old_version_uuid else None,
                 new_version_uuid=str(new_version_uuid) if new_version_uuid else None,
             )
+            from superset.versioning.etag import set_version_etag
+
+            set_version_etag(response, new_version_uuid)
         except DashboardNotFoundError:
             response = self.response_404()
         except DashboardForbiddenError:
@@ -2322,7 +2331,13 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
         versions = VersionDAO.list_versions(Dashboard, entity_uuid)
         if versions is None:
             return self.response_404()
-        return self.response(200, result=versions, count=len(versions))
+        from superset.versioning.etag import set_version_etag_by_uuid
+
+        return set_version_etag_by_uuid(
+            self.response(200, result=versions, count=len(versions)),
+            Dashboard,
+            entity_uuid,
+        )
 
     @expose(
         "/<uuid_str>/versions/<version_uuid_str>/",
@@ -2389,7 +2404,11 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
         snapshot = VersionDAO.get_version(Dashboard, entity_uuid, version_uuid)
         if snapshot is None:
             return self.response_404()
-        return self.response(200, result=snapshot)
+        from superset.versioning.etag import set_version_etag_by_uuid
+
+        return set_version_etag_by_uuid(
+            self.response(200, result=snapshot), Dashboard, entity_uuid
+        )
 
     @expose(
         "/<uuid_str>/versions/<version_uuid_str>/restore",
@@ -2470,4 +2489,8 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
         except DashboardUpdateFailedError as ex:
             logger.error("Error restoring dashboard version: %s", ex)
             return self.response_422(message=str(ex))
-        return self.response(200, message="OK")
+        from superset.versioning.etag import set_version_etag_by_uuid
+
+        return set_version_etag_by_uuid(
+            self.response(200, message="OK"), Dashboard, entity_uuid
+        )

@@ -311,7 +311,13 @@ class ChartRestApi(BaseSupersetModelRestApi):
         try:
             dash = ChartDAO.get_by_id_or_uuid(id_or_uuid)
             result = self.chart_get_response_schema.dump(dash)
-            return self.response(200, result=result)
+            from superset.daos.version import VersionDAO
+            from superset.versioning.etag import set_version_etag
+
+            return set_version_etag(
+                self.response(200, result=result),
+                VersionDAO.current_live_version_uuid(Slice, dash.id, dash.uuid),
+            )
         except ChartNotFoundError:
             return self.response_404()
 
@@ -498,6 +504,9 @@ class ChartRestApi(BaseSupersetModelRestApi):
                 old_version_uuid=str(old_version_uuid) if old_version_uuid else None,
                 new_version_uuid=str(new_version_uuid) if new_version_uuid else None,
             )
+            from superset.versioning.etag import set_version_etag
+
+            set_version_etag(response, new_version_uuid)
         except ChartNotFoundError:
             response = self.response_404()
         except ChartForbiddenError:
@@ -1318,7 +1327,13 @@ class ChartRestApi(BaseSupersetModelRestApi):
         versions = VersionDAO.list_versions(Slice, entity_uuid)
         if versions is None:
             return self.response_404()
-        return self.response(200, result=versions, count=len(versions))
+        from superset.versioning.etag import set_version_etag_by_uuid
+
+        return set_version_etag_by_uuid(
+            self.response(200, result=versions, count=len(versions)),
+            Slice,
+            entity_uuid,
+        )
 
     @expose(
         "/<uuid_str>/versions/<version_uuid_str>/",
@@ -1385,7 +1400,11 @@ class ChartRestApi(BaseSupersetModelRestApi):
         snapshot = VersionDAO.get_version(Slice, entity_uuid, version_uuid)
         if snapshot is None:
             return self.response_404()
-        return self.response(200, result=snapshot)
+        from superset.versioning.etag import set_version_etag_by_uuid
+
+        return set_version_etag_by_uuid(
+            self.response(200, result=snapshot), Slice, entity_uuid
+        )
 
     @expose(
         "/<uuid_str>/versions/<version_uuid_str>/restore",
@@ -1466,4 +1485,8 @@ class ChartRestApi(BaseSupersetModelRestApi):
         except ChartUpdateFailedError as ex:
             logger.error("Error restoring chart version: %s", ex)
             return self.response_422(message=str(ex))
-        return self.response(200, message="OK")
+        from superset.versioning.etag import set_version_etag_by_uuid
+
+        return set_version_etag_by_uuid(
+            self.response(200, message="OK"), Slice, entity_uuid
+        )

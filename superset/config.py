@@ -1164,7 +1164,11 @@ CORS_OPTIONS: dict[Any, Any] = {
     "origins": [
         "https://tile.openstreetmap.org",
         "https://tile.osm.ch",
-    ]
+    ],
+    # Make the entity-version-history `ETag` header readable by cross-origin
+    # browser clients. Without this, `fetch()` callers cannot read the header
+    # even when CORS is otherwise permissive.
+    "expose_headers": ["ETag"],
 }
 
 # Sanitizes the HTML content used in markdowns to allow its rendering in a safe manner.

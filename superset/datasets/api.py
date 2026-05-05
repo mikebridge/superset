@@ -508,6 +508,9 @@ class DatasetRestApi(BaseSupersetModelRestApi):
                 old_version_uuid=str(old_version_uuid) if old_version_uuid else None,
                 new_version_uuid=str(new_version_uuid) if new_version_uuid else None,
             )
+            from superset.versioning.etag import set_version_etag
+
+            set_version_etag(response, new_version_uuid)
         except DatasetNotFoundError:
             response = self.response_404()
         except DatasetForbiddenError:
@@ -1331,7 +1334,13 @@ class DatasetRestApi(BaseSupersetModelRestApi):
             except SupersetTemplateException as ex:
                 return self.response(ex.status, message=str(ex))
 
-        return self.response(200, **response)
+        from superset.daos.version import VersionDAO
+        from superset.versioning.etag import set_version_etag
+
+        return set_version_etag(
+            self.response(200, **response),
+            VersionDAO.current_live_version_uuid(SqlaTable, table.id, table.uuid),
+        )
 
     @expose("/<int:pk>/drill_info/", methods=("GET",))
     @protect()
@@ -1533,7 +1542,13 @@ class DatasetRestApi(BaseSupersetModelRestApi):
         versions = VersionDAO.list_versions(SqlaTable, entity_uuid)
         if versions is None:
             return self.response_404()
-        return self.response(200, result=versions, count=len(versions))
+        from superset.versioning.etag import set_version_etag_by_uuid
+
+        return set_version_etag_by_uuid(
+            self.response(200, result=versions, count=len(versions)),
+            SqlaTable,
+            entity_uuid,
+        )
 
     @expose(
         "/<uuid_str>/versions/<version_uuid_str>/",
@@ -1604,7 +1619,11 @@ class DatasetRestApi(BaseSupersetModelRestApi):
         snapshot = VersionDAO.get_version(SqlaTable, entity_uuid, version_uuid)
         if snapshot is None:
             return self.response_404()
-        return self.response(200, result=snapshot)
+        from superset.versioning.etag import set_version_etag_by_uuid
+
+        return set_version_etag_by_uuid(
+            self.response(200, result=snapshot), SqlaTable, entity_uuid
+        )
 
     @expose(
         "/<uuid_str>/versions/<version_uuid_str>/restore",
@@ -1685,4 +1704,8 @@ class DatasetRestApi(BaseSupersetModelRestApi):
         except DatasetUpdateFailedError as ex:
             logger.error("Error restoring dataset version: %s", ex)
             return self.response_422(message=str(ex))
-        return self.response(200, message="OK")
+        from superset.versioning.etag import set_version_etag_by_uuid
+
+        return set_version_etag_by_uuid(
+            self.response(200, message="OK"), SqlaTable, entity_uuid
+        )
