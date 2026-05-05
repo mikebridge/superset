@@ -153,7 +153,21 @@ class Dashboard(CoreDashboard, AuditMixinNullable, ImportExportMixin):
     # for ``dashboard_slices`` and ``Reverter(relations=["slices"])`` can
     # restore chart membership. Owners / roles stay excluded — access metadata,
     # not user-authored content (ADR-005).
-    __versioned__: dict[str, Any] = {"exclude": ["owners", "roles"]}
+    # Audit columns (changed_on/created_on/changed_by_fk/created_by_fk) are
+    # auto-bumped by AuditMixin on every save; excluding them lets Continuum's
+    # is_modified() return False on no-op saves (e.g. owners-only edits) so we
+    # don't create empty version rows. version_transaction.user_id /
+    # issued_at preserve "who/when" without per-row duplication.
+    __versioned__: dict[str, Any] = {
+        "exclude": [
+            "owners",
+            "roles",
+            "changed_on",
+            "created_on",
+            "changed_by_fk",
+            "created_by_fk",
+        ]
+    }
     id = Column(Integer, primary_key=True)
     dashboard_title = Column(String(500))
     position_json = Column(utils.MediumText())

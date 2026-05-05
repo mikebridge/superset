@@ -1270,8 +1270,19 @@ class SqlaTable(
     # Exclude M2M association relationships: Continuum only captures FK columns on
     # association INSERTs (not the auto-increment id), which breaks the NOT NULL PK.
     # deleted_at exclusion will be added when sc-103157 (soft delete) is merged (T043).
+    # Audit columns are auto-bumped on every save. Excluding them lets
+    # Continuum's is_modified() return False on no-op saves (e.g. owners-only
+    # edits) so we don't create empty version rows. version_transaction.user_id
+    # / issued_at preserve "who/when".
     __versioned__: dict[str, Any] = {
-        "exclude": ["owners", "row_level_security_filters"]
+        "exclude": [
+            "owners",
+            "row_level_security_filters",
+            "changed_on",
+            "created_on",
+            "changed_by_fk",
+            "created_by_fk",
+        ]
     }
 
     # Note this uniqueness constraint is not part of the physical schema, i.e., it does
