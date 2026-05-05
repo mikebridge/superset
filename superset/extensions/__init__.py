@@ -156,6 +156,7 @@ from sqlalchemy_continuum import (  # noqa: E402
 )
 
 from superset.versioning.factory import (  # noqa: E402
+    SkipUnmodifiedPlugin,
     VersioningFlaskPlugin,
     VersionTransactionFactory,
 )
@@ -166,7 +167,7 @@ _continuum_manager.transaction_cls = VersionTransactionFactory()
 
 make_versioned(
     user_cls=None,
-    plugins=[VersioningFlaskPlugin()],
+    plugins=[VersioningFlaskPlugin(), SkipUnmodifiedPlugin()],
     options={"strategy": "validity"},
 )
 

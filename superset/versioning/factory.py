@@ -14,12 +14,19 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import logging
 from typing import Any
 
 import sqlalchemy as sa
 import sqlalchemy.orm as sa_orm
+from sqlalchemy_continuum import version_class
+from sqlalchemy_continuum.operation import Operation
+from sqlalchemy_continuum.plugins.base import Plugin
 from sqlalchemy_continuum.plugins.flask import FlaskPlugin
 from sqlalchemy_continuum.transaction import TransactionFactory
+from sqlalchemy_continuum.utils import versioned_column_properties
+
+logger = logging.getLogger(__name__)
 
 
 class VersionTransactionFactory(TransactionFactory):
@@ -76,3 +83,78 @@ class VersioningFlaskPlugin(FlaskPlugin):
             remote_addr = None
 
         return {"user_id": user_id, "remote_addr": remote_addr}
+
+
+class SkipUnmodifiedPlugin(Plugin):
+    """Skip creating version rows for UPDATE operations whose post-flush
+    column values are byte-identical to the previous live version row.
+
+    Continuum creates a version row for every entity in ``session.dirty``,
+    including saves where the SQLAlchemy ORM marked a column dirty (because
+    Superset re-serialised ``json_metadata`` via ``json.dumps`` on the save
+    path, or AuditMixin auto-bumped ``changed_on``) but the resulting value
+    is unchanged from the previous version. Those rows pollute the version
+    history with no-op entries.
+
+    ``is_modified()`` from Continuum is not enough: it consults SQLAlchemy's
+    attribute history, which is "did setattr produce a different value?",
+    not "did the final stored value change?". So we compare each
+    non-excluded versioned column on ``operation.target`` against the
+    previous live version row's value; if all are equal, the operation
+    is marked ``processed`` and Continuum skips it (see
+    ``UnitOfWork.create_version_objects``).
+
+    The associated transaction is not removed; if every operation is a
+    no-op the transaction becomes an orphan in ``version_transaction``
+    and is swept by the retention task.
+    """
+
+    def before_create_version_objects(self, uow: Any, session: Any) -> None:
+        # ``uow.operations`` is a custom Continuum ``Operations`` collection;
+        # use its ``.items()`` method (not ``.values()``) to iterate.
+        for _key, operation in uow.operations.items():
+            if operation.processed or operation.type != Operation.UPDATE:
+                continue
+            try:
+                if self._matches_previous_version(operation.target, session):
+                    operation.processed = True
+            except Exception:  # pylint: disable=broad-except
+                # Defensive — if introspection fails for any reason, fall
+                # back to creating the version row.
+                logger.exception(
+                    "SkipUnmodifiedPlugin: skip-check raised for %s",
+                    type(operation.target).__name__,
+                )
+
+    @staticmethod
+    def _matches_previous_version(target: Any, session: Any) -> bool:
+        """Return ``True`` when every non-excluded versioned column on
+        *target* matches the value stored in its previous live version row
+        (i.e., the row with ``end_transaction_id IS NULL``).
+        """
+        cls = type(target)
+        try:
+            ver_cls = version_class(cls)
+        except Exception:  # pylint: disable=broad-except
+            return False
+        ver_table = ver_cls.__table__
+
+        col_keys = [prop.key for prop in versioned_column_properties(target)]
+        if not col_keys:
+            return False
+
+        select_stmt = (
+            sa.select(*[ver_table.c[c] for c in col_keys])
+            .where(ver_table.c.id == target.id)
+            .where(ver_table.c.end_transaction_id.is_(None))
+            .order_by(ver_table.c.transaction_id.desc())
+            .limit(1)
+        )
+        row = session.connection().execute(select_stmt).first()
+        if row is None:
+            return False  # no previous version → let Continuum create one
+
+        for col_name, prev_value in zip(col_keys, row, strict=False):
+            if getattr(target, col_name, None) != prev_value:
+                return False
+        return True
