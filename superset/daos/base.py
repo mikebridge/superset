@@ -269,7 +269,13 @@ class BaseDAO(CoreBaseDAO[T], Generic[T]):
             column_name: Name of the column to search by
             value: Value to search for
             skip_base_filter: Whether to skip base filtering
-            skip_visibility_filter: Whether to skip the soft-delete visibility filter
+            skip_visibility_filter: When True, the query returns soft-deleted
+                rows in addition to active ones. Most callers want False
+                (the default), and the ``SoftDeleteMixin`` listener filters
+                soft-deleted rows out automatically. True is for restore
+                commands, the v1 importers' soft-deleted-UUID lookup, and
+                admin tooling that needs to read or restore soft-deleted
+                rows by ID.
             query_options: SQLAlchemy query options (e.g., joinedload,
                 subqueryload) to apply to the query for eager loading
 
@@ -319,8 +325,9 @@ class BaseDAO(CoreBaseDAO[T], Generic[T]):
             id_column: Column name to use (defaults to cls.id_column_name)
             query_options: SQLAlchemy query options (e.g., joinedload,
                 subqueryload) to apply to the query for eager loading
-            skip_visibility_filter: Keyword-only. Whether to skip the
-                soft-delete visibility filter
+            skip_visibility_filter: Keyword-only. When True, the query
+                returns soft-deleted rows in addition to active ones. See
+                ``_find_by_column`` for the full rationale.
 
         Returns:
             Model instance or None if not found
@@ -350,8 +357,9 @@ class BaseDAO(CoreBaseDAO[T], Generic[T]):
         :param skip_base_filter: If true, skip applying the base filter
         :param id_column: Optional column name to use for ID lookup
                          (defaults to id_column_name)
-        :param skip_visibility_filter: Keyword-only. If true, skip the
-            soft-delete visibility filter so soft-deleted rows are returned
+        :param skip_visibility_filter: Keyword-only. When True, the query
+            returns soft-deleted rows in addition to active ones. See
+            ``_find_by_column`` for the full rationale.
         """
         column = id_column or cls.id_column_name
         id_col = getattr(cls.model_cls, column, None)

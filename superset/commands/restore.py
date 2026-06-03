@@ -52,6 +52,18 @@ class BaseRestoreCommand(BaseCommand, Generic[T]):
     The model returned from ``validate()`` is the soft-deleted row,
     type-narrowed via ``Generic[T]``. ``run()`` calls ``model.restore()``
     on it (the method comes from ``SoftDeleteMixin``).
+
+    Scope: ``restore()`` clears ``deleted_at`` on the entity row and
+    does nothing else. It does not touch related rows — charts attached
+    to a restored dashboard via ``dashboard_slices``, reports attached
+    to a chart, columns or metrics on a dataset. Operations that include
+    restoration plus broader work — most notably the v1 importer's
+    "restore-and-update" flow at
+    ``commands/<entity>/importers/v1/utils.py:import_<entity>`` — are
+    separate operations layered on top of ``restore()`` and manage their
+    own transactional scope. Do not extend ``BaseRestoreCommand`` or
+    override ``run()`` to perform that broader work; add a new command
+    at the appropriate layer instead.
     """
 
     dao: ClassVar[Any]
@@ -70,6 +82,10 @@ class BaseRestoreCommand(BaseCommand, Generic[T]):
         def _perform() -> None:
             model = self.validate()
             model.restore()
+            # If audit logging, search re-indexing, or notification
+            # subscribers ever need to react to restoration, this is the
+            # natural place to wire it in — inside the transaction, after
+            # the restore succeeds. No consumer today.
 
         _perform()
 
