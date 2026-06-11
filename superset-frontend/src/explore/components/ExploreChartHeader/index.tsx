@@ -18,7 +18,7 @@
  */
 import { FC, memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useHistory } from 'react-router-dom';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import {
   Tooltip,
   Button,
@@ -53,6 +53,7 @@ import { Slice } from 'src/types/Chart';
 import { ReportObject } from 'src/features/reports/types';
 import { User } from 'src/types/bootstrapTypes';
 import getBootstrapData from 'src/utils/getBootstrapData';
+import { selectIsChartVersionPreviewActive } from 'src/features/versionHistory/reducer';
 import { useExploreAdditionalActionsMenu } from '../useExploreAdditionalActionsMenu';
 import { useExploreMetadataBar } from './useExploreMetadataBar';
 
@@ -120,6 +121,7 @@ const ExploreChartHeader: FC<ExploreChartHeaderProps> = ({
   isSaveModalVisible,
 }) => {
   const dispatch = useDispatch();
+  const isVersionPreviewActive = useSelector(selectIsChartVersionPreviewActive);
   const { latestQueryFormData, sliceFormData } = chart;
   const [isPropertiesModalOpen, setIsPropertiesModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
@@ -281,14 +283,22 @@ const ExploreChartHeader: FC<ExploreChartHeaderProps> = ({
     () => ({
       title: sliceName ?? '',
       canEdit:
-        !slice ||
-        canOverwrite ||
-        Boolean(slice?.editors?.some(editor => userSubjects.has(editor))),
+        !isVersionPreviewActive &&
+        (!slice ||
+          canOverwrite ||
+          Boolean(slice?.editors?.some(editor => userSubjects.has(editor))),
       onSave: actions.updateChartTitle,
       placeholder: t('Add the name of the chart'),
       label: t('Chart title'),
     }),
-    [actions.updateChartTitle, canOverwrite, slice, sliceName, userSubjects],
+    [
+      actions.updateChartTitle,
+      canOverwrite,
+      isVersionPreviewActive,
+      slice,
+      sliceName,
+      userSubjects,
+    ],
   );
 
   const certificatiedBadgeProps = useMemo(
@@ -349,7 +359,7 @@ const ExploreChartHeader: FC<ExploreChartHeaderProps> = ({
           <Button
             buttonStyle="secondary"
             onClick={showModal}
-            disabled={saveDisabled}
+            disabled={saveDisabled || isVersionPreviewActive}
             data-test="query-save-button"
             css={saveButtonStyles}
             icon={<Icons.SaveOutlined />}
@@ -359,15 +369,16 @@ const ExploreChartHeader: FC<ExploreChartHeaderProps> = ({
         </div>
       </Tooltip>
     ),
-    [saveDisabled, showModal],
+    [isVersionPreviewActive, saveDisabled, showModal],
   );
 
   const menuDropdownProps = useMemo(
     () => ({
       open: isDropdownVisible,
       onOpenChange: setIsDropdownVisible,
+      disabled: isVersionPreviewActive,
     }),
-    [isDropdownVisible, setIsDropdownVisible],
+    [isDropdownVisible, isVersionPreviewActive, setIsDropdownVisible],
   );
 
   return (
