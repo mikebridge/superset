@@ -38,6 +38,18 @@ The `thumbnail_url` field has been removed from `GET /api/v1/dashboard/` list re
 
 The thumbnail endpoint redirects to the current digest URL regardless of whether the supplied digest is exact. If the image is not yet cached, that digest URL may return `202` and trigger async generation. Using `changed_on_utc` as the digest is sufficient for cache-busting purposes.
 
+### Entity version-history infrastructure (gated off by default)
+
+Introduces the schema and SQLAlchemy-Continuum wiring that captures version history for charts, dashboards, and datasets, plus read-only `GET /api/v1/{chart,dashboard,dataset}/<uuid>/versions/` endpoints. This ships **inert**: a new config flag `ENABLE_VERSIONING_CAPTURE` defaults to `False`, so no save writes any version rows and the endpoints return empty. It is an operational kill-switch (a release toggle that becomes a permanent ops switch), not a feature flag — set it to `True` to enable capture once validated. The migration is additive; existing entity `PUT` responses gain `old_version_uuid` / `new_version_uuid` body fields and an `ETag` header (both null/absent when capture is off).
+
+A few save- and import-path internals change **unconditionally** (independent of the flag), because the versioned mappers must behave correctly whether or not capture is enabled:
+
+- `DatasetDAO` column/metric updates move from bulk operations to per-row ORM operations, and a metadata refresh now preserves column primary keys via a natural-key (`column_name`) upsert instead of delete-and-reinsert — so charts that reference dataset columns by id keep working across a refresh (previously such references could be invalidated).
+- `ImportExportMixin.reset_ownership` stamps the current user onto `created_by`/`changed_by` when a request context is present (previously left null for the column default to fill).
+- `UpdateDashboardCommand` runs its body under `no_autoflush`.
+
+These are behavior changes that take effect on upgrade regardless of `ENABLE_VERSIONING_CAPTURE`; no operator action is required.
+
 ### Webhook alerts/reports block private/internal hosts by default
 
 Webhook alert/report dispatch (`WebhookNotification.send`) now validates the target URL's host against the same private/internal-IP block applied to dataset import URLs. If the resolved host is in a loopback, link-local, private (RFC-1918), shared-CGNAT, or multicast range, the webhook is rejected with `NotificationParamException`.
