@@ -74,14 +74,6 @@ const DashboardList = lazy(
     import(/* webpackChunkName: "DashboardList" */ 'src/pages/DashboardList'),
 );
 
-// Throwaway: sc-107283 activity-view debug UI. Delete this lazy import +
-// the route below + the src/pages/ActivityDebug directory when the
-// feature ships.
-const ActivityDebug = lazy(
-  () =>
-    import(/* webpackChunkName: "ActivityDebug" */ 'src/pages/ActivityDebug'),
-);
-
 const Dashboard = lazy(
   () => import(/* webpackChunkName: "Dashboard" */ 'src/pages/Dashboard'),
 );
@@ -234,11 +226,6 @@ export const routes: Routes = [
   {
     path: '/dashboard/list/',
     Component: DashboardList,
-  },
-  // Throwaway: sc-107283 activity-view debug UI.
-  {
-    path: '/activity-debug/:resource/:uuid',
-    Component: ActivityDebug,
   },
   {
     path: '/superset/dashboard/:idOrSlug/',
