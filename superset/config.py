@@ -1470,6 +1470,29 @@ SUPERSET_VERSION_HISTORY_RETENTION_DAYS: int = int(
     os.environ.get("SUPERSET_VERSION_HISTORY_RETENTION_DAYS", "30")
 )
 
+# Retention window (days) for purging soft-deleted entities (dashboards,
+# charts, datasets). A soft-deleted entity whose ``deleted_at`` is older than
+# this value is permanently removed — together with its dependents and version
+# history — by the ``deletion_retention.purge_soft_deleted`` Celery beat task
+# (registered below in ``CeleryConfig.beat_schedule``). This environment value
+# is the seed default and single-tenant knob; a per-workspace override may be
+# set at runtime under ``SharedKey.SOFT_DELETE_RETENTION_DAYS`` (read live each
+# run, taking precedence). ``0`` from either source disables the time-based
+# purge entirely; force-purge is unaffected.
+SUPERSET_SOFT_DELETE_RETENTION_DAYS: int = int(
+    os.environ.get("SUPERSET_SOFT_DELETE_RETENTION_DAYS", "30")
+)
+
+# Dry-run / dark-launch switch for the soft-delete purge task. When True the
+# task runs its full selection logic and emits ``would_purge`` statsd counts
+# but performs no deletes and writes no audit rows. The introducing release
+# defaults this ON so operators can validate counts in production before
+# activating real purging; single-tenant OSS operators may disable it
+# immediately. Orthogonal to the window (``0`` disables the task entirely).
+SUPERSET_SOFT_DELETE_PURGE_DRY_RUN: bool = (
+    os.environ.get("SUPERSET_SOFT_DELETE_PURGE_DRY_RUN", "true").lower() == "true"
+)
+
 # Adds a warning message on sqllab save query and schedule query modals.
 SQLLAB_SAVE_WARNING_MESSAGE = None
 SQLLAB_SCHEDULE_WARNING_MESSAGE = None
@@ -1540,6 +1563,14 @@ class CeleryConfig:  # pylint: disable=too-few-public-methods
         "version_history.prune_old_versions": {
             "task": "version_history.prune_old_versions",
             "schedule": crontab(minute=0, hour=3),
+        },
+        # Deletion retention: permanently purge soft-deleted entities older
+        # than the retention window. Daily at 04:00; the task itself
+        # short-circuits when the window is 0 (disabled) and runs
+        # non-destructively while SUPERSET_SOFT_DELETE_PURGE_DRY_RUN is on.
+        "deletion_retention.purge_soft_deleted": {
+            "task": "deletion_retention.purge_soft_deleted",
+            "schedule": crontab(minute=0, hour=4),
         },
         # Uncomment to enable pruning of the query table
         # "prune_query": {

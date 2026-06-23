@@ -117,6 +117,10 @@ class Slice(  # pylint: disable=too-many-public-methods
             "perm",
             "schema_perm",
             "catalog_perm",
+            # Soft-delete lifecycle is not version content; excluding it keeps
+            # the slices_version shadow table consistent with the versioned
+            # mapper (sc-111185 integration).
+            "deleted_at",
         ]
     }
     id = Column(Integer, primary_key=True)

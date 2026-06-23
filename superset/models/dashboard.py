@@ -170,6 +170,10 @@ class Dashboard(CoreDashboard, SoftDeleteMixin, AuditMixinNullable, ImportExport
             "created_on",
             "changed_by_fk",
             "created_by_fk",
+            # Soft-delete lifecycle is not version content; excluding it keeps
+            # the dashboards_version shadow table consistent with the versioned
+            # mapper (sc-111185 integration).
+            "deleted_at",
         ]
     }
     id = Column(Integer, primary_key=True)

@@ -1367,6 +1367,10 @@ class SqlaTable(
             "perm",
             "schema_perm",
             "catalog_perm",
+            # Soft-delete lifecycle is not version content; excluding it also
+            # keeps the *_version shadow tables (which never had this column)
+            # consistent with the versioned mapper (sc-111185 integration).
+            "deleted_at",
         ]
     }
 
