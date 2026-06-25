@@ -58,6 +58,10 @@ const ChartList = lazy(
   () => import(/* webpackChunkName: "ChartList" */ 'src/pages/ChartList'),
 );
 
+const DeletedList = lazy(
+  () => import(/* webpackChunkName: "DeletedList" */ 'src/pages/DeletedList'),
+);
+
 const CssTemplateList = lazy(
   () =>
     import(
@@ -340,6 +344,14 @@ if (isFeatureEnabled(FeatureFlag.TaggingSystem)) {
   routes.push({
     path: '/superset/tags/',
     Component: Tags,
+  });
+}
+
+// Recently-Deleted (Archive) view — gated by the soft-delete feature (T007).
+if (isFeatureEnabled(FeatureFlag.SoftDelete)) {
+  routes.push({
+    path: '/deleted/',
+    Component: DeletedList,
   });
 }
 
