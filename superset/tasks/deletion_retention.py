@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import sqlalchemy as sa
 from flask import current_app
@@ -65,9 +65,7 @@ def _soft_delete_models() -> list[type[SoftDeleteMixin]]:
     return list(SoftDeleteMixin._registered_subclasses)  # noqa: SLF001
 
 
-def _iter_eligible_ids(
-    model: type[SoftDeleteMixin], cutoff: datetime, batch: int
-) -> Iterator[list[int]]:
+def _iter_eligible_ids(model: Any, cutoff: datetime, batch: int) -> Iterator[list[int]]:
     """Yield id-ordered batches of eligible row ids — ``deleted_at IS NOT NULL
     AND deleted_at < cutoff`` — querying with the visibility-filter bypass so
     soft-deleted rows are visible. Windowed by an ``id`` watermark so memory
@@ -107,7 +105,8 @@ def _purge_impl(window_days: int, dry_run: bool) -> dict[str, Any]:
     would_purge: dict[str, int] = {}
     failures = 0
 
-    for model in _soft_delete_models():
+    for registered_model in _soft_delete_models():
+        model = cast(Any, registered_model)
         entity_type = model.__tablename__
         purged_n, would_n, failed_n = _purge_model(model, cutoff, dry_run)
         if would_n:
@@ -135,9 +134,7 @@ def _purge_impl(window_days: int, dry_run: bool) -> dict[str, Any]:
     return stats
 
 
-def _purge_model(
-    model: type[SoftDeleteMixin], cutoff: datetime, dry_run: bool
-) -> tuple[int, int, int]:
+def _purge_model(model: Any, cutoff: datetime, dry_run: bool) -> tuple[int, int, int]:
     """Process one model's eligible rows. Returns ``(purged, would_purge,
     failures)``. A single entity's cascade failure is rolled back, logged, and
     counted — it never aborts the batch (FR-PURGE-010)."""
@@ -152,7 +149,7 @@ def _purge_model(
                 _purge_one(model, entity_id, cutoff)
                 purged += 1
             except Exception:  # pylint: disable=broad-except
-                db.session.rollback()
+                db.session.rollback()  # pylint: disable=consider-using-transaction
                 failures += 1
                 logger.exception(
                     "deletion_retention: cascade failed for %s id=%s",
@@ -162,7 +159,7 @@ def _purge_model(
     return purged, would, failures
 
 
-def _purge_one(model: type[SoftDeleteMixin], entity_id: int, cutoff: datetime) -> None:
+def _purge_one(model: Any, entity_id: int, cutoff: datetime) -> None:
     """Purge a single entity in its own transaction with a write-ahead audit
     record (FR-PURGE-012 / C19)."""
     with skip_visibility_filter(db.session, model):
@@ -179,7 +176,7 @@ def _purge_one(model: type[SoftDeleteMixin], entity_id: int, cutoff: datetime) -
         result = cascade_hard_delete(
             db.session, entity, enforce_window=True, cutoff=cutoff
         )
-        db.session.commit()
+        db.session.commit()  # pylint: disable=consider-using-transaction
     if result.purged:
         audit.confirm(record_id, affected_referrers=result.dangling_chart_uuids)
 

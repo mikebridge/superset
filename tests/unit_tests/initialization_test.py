@@ -519,6 +519,8 @@ class TestAppRootMiddlewareBoundary:
         assert status.startswith("200")
         assert captured["PATH_INFO"] == "/welcome/"
         assert captured["SCRIPT_NAME"] == "/myapp"
+
+
 class TestRetentionBeatWarning:
     """Cover ``_warn_if_retention_beat_missing`` — the startup check that
     surfaces a missing ``version_history.prune_old_versions`` beat entry.

@@ -305,3 +305,10 @@ pre-commit run eslint            # Frontend linting
 ---
 
 **LLM Note**: This codebase is actively modernizing toward full TypeScript and type safety. Always run `pre-commit run` to validate changes. Follow the ongoing refactors section to avoid deprecated patterns.
+
+## Active Technologies
+- Python 3.10+ + Alembic 1.15.x, SQLAlchemy 1.4.x, Superset migration utilities (sc-112173-fix-customer-location-constraint)
+- Superset metadata databases on PostgreSQL, MySQL, and SQLite (sc-112173-fix-customer-location-constraint)
+
+## Recent Changes
+- sc-112173-fix-customer-location-constraint: Added Python 3.10+ + Alembic 1.15.x, SQLAlchemy 1.4.x, Superset migration utilities

@@ -27,7 +27,7 @@ never modified). Idempotent: a UUID that resolves to nothing is a no-op.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, cast, Optional
 
 from superset import db
 from superset.commands.deletion_retention import audit
@@ -69,7 +69,7 @@ class ForcePurgeCommand:
             logger.info("force_purge: no entity for uuid=%s (no-op)", self._uuid)
             return {"purged": False, "reason": "not_found", "uuid": self._uuid}
 
-        entity_type = entity.__tablename__
+        entity_type = cast(Any, type(entity)).__tablename__
         record_id = audit.write_ahead(
             trigger=audit.TRIGGER_FORCE,
             actor=self._actor,
@@ -80,7 +80,7 @@ class ForcePurgeCommand:
             result: CascadeResult = cascade_hard_delete(
                 db.session, entity, enforce_window=False
             )
-            db.session.commit()
+            db.session.commit()  # pylint: disable=consider-using-transaction
         audit.confirm(record_id, affected_referrers=result.dangling_chart_uuids)
         logger.info(
             "force_purge: purged %s uuid=%s (dangling charts=%d, dashboard_slices=%d)",

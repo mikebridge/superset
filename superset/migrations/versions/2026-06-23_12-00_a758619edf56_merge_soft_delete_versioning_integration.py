@@ -21,7 +21,8 @@ upstream master heads into a single revision so the deletion-retention purge
 migration can build on a unified base.
 
 Revision ID: a758619edf56
-Revises: a7d3f1b9c2e4, c233f5365c9e, 7c4a8d09ca37, 9e1f3b8c4d2a, 3a8e6f2c1b95, d3b9a1f6c204
+Revises: a7d3f1b9c2e4, c233f5365c9e, 7c4a8d09ca37, 9e1f3b8c4d2a,
+3a8e6f2c1b95, d3b9a1f6c204
 Create Date: 2026-06-23 12:00:00.000000
 
 """

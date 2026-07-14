@@ -16,6 +16,9 @@
 # under the License.
 """Integration coverage for the per-workspace retention window (sc-111185)."""
 
+# Tests deliberately control transaction boundaries through shared-value helpers.
+# pylint: disable=consider-using-transaction
+
 from __future__ import annotations
 
 from superset.commands.deletion_retention.window import resolve_retention_window

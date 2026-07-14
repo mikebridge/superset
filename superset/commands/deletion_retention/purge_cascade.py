@@ -200,14 +200,16 @@ def _delete_m2m_joins(session: Session, model: type, entity_id: int) -> int:
     audit entry for chart purges — they may belong to live dashboards).
     """
     # pylint: disable=import-outside-toplevel
-    from superset.connectors.sqla.models import SqlaTable, sqlatable_user
-    from superset.models.dashboard import (
-        Dashboard,
-        dashboard_slices,
-        dashboard_user,
-        DashboardRoles,
+    from superset.connectors.sqla.models import SqlaTable
+    from superset.models.dashboard import Dashboard, dashboard_slices
+    from superset.models.slice import Slice
+    from superset.subjects.models import (
+        chart_editors,
+        chart_viewers,
+        dashboard_editors,
+        dashboard_viewers,
+        sqlatable_editors,
     )
-    from superset.models.slice import Slice, slice_user
     from superset.tags.models import ObjectType, TaggedObject
 
     removed_dashboard_slices = 0
@@ -218,12 +220,16 @@ def _delete_m2m_joins(session: Session, model: type, entity_id: int) -> int:
             )
         )
         session.execute(
-            sa.delete(dashboard_user).where(dashboard_user.c.dashboard_id == entity_id)
+            sa.delete(dashboard_editors).where(
+                dashboard_editors.c.dashboard_id == entity_id
+            )
         )
         session.execute(
-            sa.delete(DashboardRoles).where(DashboardRoles.c.dashboard_id == entity_id)
+            sa.delete(dashboard_viewers).where(
+                dashboard_viewers.c.dashboard_id == entity_id
+            )
         )
-        _delete_tags(session, TaggedObject, ObjectType.dashboard, entity_id)
+        _delete_tags(session, TaggedObject.__table__, ObjectType.dashboard, entity_id)
     elif model is Slice:
         # Every dashboard_slices row pointing at this chart, including those
         # owned by live dashboards (the live dashboard survives, minus this
@@ -231,25 +237,32 @@ def _delete_m2m_joins(session: Session, model: type, entity_id: int) -> int:
         removed_dashboard_slices = session.execute(
             sa.delete(dashboard_slices).where(dashboard_slices.c.slice_id == entity_id)
         ).rowcount
-        session.execute(sa.delete(slice_user).where(slice_user.c.slice_id == entity_id))
-        _delete_tags(session, TaggedObject, ObjectType.chart, entity_id)
+        session.execute(
+            sa.delete(chart_editors).where(chart_editors.c.chart_id == entity_id)
+        )
+        session.execute(
+            sa.delete(chart_viewers).where(chart_viewers.c.chart_id == entity_id)
+        )
+        _delete_tags(session, TaggedObject.__table__, ObjectType.chart, entity_id)
     elif model is SqlaTable:
         session.execute(
-            sa.delete(sqlatable_user).where(sqlatable_user.c.table_id == entity_id)
+            sa.delete(sqlatable_editors).where(
+                sqlatable_editors.c.table_id == entity_id
+            )
         )
-        _delete_tags(session, TaggedObject, ObjectType.dataset, entity_id)
+        _delete_tags(session, TaggedObject.__table__, ObjectType.dataset, entity_id)
     return removed_dashboard_slices
 
 
 def _delete_tags(
-    session: Session, tagged_object: type, object_type: Any, entity_id: int
+    session: Session, tagged_object: sa.Table, object_type: Any, entity_id: int
 ) -> None:
     """Remove the entity's ``tagged_object`` rows (the ``after_delete`` tag
     cleanup Core bulk-delete skips — C14/C20)."""
     session.execute(
-        sa.delete(tagged_object.__table__).where(
-            tagged_object.object_id == entity_id,
-            tagged_object.object_type == object_type,
+        sa.delete(tagged_object).where(
+            tagged_object.c.object_id == entity_id,
+            tagged_object.c.object_type == object_type,
         )
     )
 
@@ -426,6 +439,5 @@ def _sweep_orphan_transactions(
                 .distinct()
             )
         )
-    orphaned = tx_ids - still_referenced
-    if orphaned:
+    if orphaned := tx_ids - still_referenced:
         session.execute(sa.delete(tx).where(tx.c.id.in_(orphaned)))

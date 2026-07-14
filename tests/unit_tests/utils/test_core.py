@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 import os
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
@@ -35,6 +36,7 @@ from superset.utils.core import (
     FilterOperator,
     generic_find_constraint_name,
     generic_find_fk_constraint_name,
+    generic_find_uq_constraint_name,
     get_datasource_full_name,
     get_query_source_from_request,
     get_stacktrace,
@@ -604,6 +606,55 @@ def test_generic_find_fk_constraint_none_exist():
     )
 
     assert result is None
+
+
+@pytest.mark.parametrize(
+    "columns",
+    [
+        {"column1", "column2"},
+        ["column2", "column1"],
+        ("column2", "column1"),
+    ],
+)
+def test_generic_find_uq_constraint_name_matches_collections(
+    columns: Collection[str],
+) -> None:
+    inspector = MagicMock()
+    inspector.get_unique_constraints.return_value = [
+        {"name": "unrelated_constraint", "column_names": ["column1"]},
+        {
+            "name": "expected_constraint",
+            "column_names": ["column1", "column2"],
+        },
+        {"name": "later_constraint", "column_names": ["column2", "column1"]},
+    ]
+
+    assert (
+        generic_find_uq_constraint_name("my_table", columns, inspector)
+        == "expected_constraint"
+    )
+
+
+@pytest.mark.parametrize(
+    "columns",
+    [
+        {"column1"},
+        ["column1", "column2", "column3"],
+        ("other_column",),
+    ],
+)
+def test_generic_find_uq_constraint_name_rejects_nonmatching_columns(
+    columns: Collection[str],
+) -> None:
+    inspector = MagicMock()
+    inspector.get_unique_constraints.return_value = [
+        {
+            "name": "existing_constraint",
+            "column_names": ["column1", "column2"],
+        },
+    ]
+
+    assert generic_find_uq_constraint_name("my_table", columns, inspector) is None
 
 
 def test_get_datasource_full_name():

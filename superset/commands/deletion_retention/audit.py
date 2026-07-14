@@ -100,10 +100,10 @@ def write_ahead(
             created_on=datetime.utcnow(),
         )
         session.add(record)
-        session.commit()
+        session.commit()  # pylint: disable=consider-using-transaction
         return record.id
     except Exception:  # pylint: disable=broad-except
-        session.rollback()
+        session.rollback()  # pylint: disable=consider-using-transaction
         logger.warning(
             "deletion_retention: failed to write pending audit row", exc_info=True
         )
@@ -128,9 +128,9 @@ def confirm(record_id: Optional[int], **details: Any) -> None:
         referrers = details.get("affected_referrers")
         if referrers:
             record.affected_referrers = ",".join(referrers)
-        session.commit()
+        session.commit()  # pylint: disable=consider-using-transaction
     except Exception:  # pylint: disable=broad-except
-        session.rollback()
+        session.rollback()  # pylint: disable=consider-using-transaction
         logger.warning(
             "deletion_retention: failed to confirm audit row %s",
             record_id,

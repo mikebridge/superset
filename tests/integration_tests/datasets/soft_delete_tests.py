@@ -143,9 +143,14 @@ class TestDatasetSoftDelete(SupersetTestCase):
     @with_feature_flags(SOFT_DELETE=True)
     def test_only_filter_returns_only_soft_deleted_datasets(self) -> None:
         """dataset_deleted_state=only excludes live rows and returns only deleted ones."""  # noqa: E501
-        ids = [row.id for row in db.session.query(SqlaTable).limit(2).all()]
-        assert len(ids) >= 2, "Need at least two example datasets for this test"
-        live_id, deleted_id = ids[0], ids[1]
+        database = Database(
+            database_name="sd_only_filter_db", sqlalchemy_uri="sqlite://"
+        )
+        live = SqlaTable(table_name="sd_only_filter_live", database=database)
+        deleted = SqlaTable(table_name="sd_only_filter_deleted", database=database)
+        db.session.add_all([database, live, deleted])
+        db.session.commit()
+        live_id, deleted_id = live.id, deleted.id
         self.login(ADMIN_USERNAME)
 
         try:
@@ -162,6 +167,7 @@ class TestDatasetSoftDelete(SupersetTestCase):
             assert live_id not in returned_ids
         finally:
             self._restore_dataset(deleted_id)
+            self._hard_delete_created(live_id, database)
 
     def _hard_delete_created(self, dataset_id: int, database: Database) -> None:
         """Remove a test-created dataset + its database (visibility bypassed)."""
@@ -534,21 +540,19 @@ class TestDatasetRestore(SupersetTestCase):
 
     # Note: a ``test_restore_blocked_by_active_logical_duplicate`` integration
     # test is deliberately absent: the "delete -> seed twin -> restore" setup
-    # is blocked at step 2 by a DB-level constraint, though *which* constraint
-    # depends on how the schema was built. ``metadata.create_all`` (unit-test
-    # schemas) materializes the model's otherwise metadata-only 4-column
-    # ``UniqueConstraint``; migration-built databases instead still carry the
-    # legacy 3-column ``_customer_location_uc`` from the 2016 ``b4456560d4f3``
-    # migration — the 2024 ``df3d7e2eb9a4`` migration that intends to drop it
-    # is a silent no-op (it passes a list to
-    # ``generic_find_uq_constraint_name``, which compares it to a set; the
-    # comparison never matches). Seeding a NULL-schema twin would dodge the
-    # constraint, but a NULL-schema row would not match the application
-    # check's identity predicate either. The restore-side check
+    # is blocked at step 2 in this ``metadata.create_all``-built test schema,
+    # which materializes the model's otherwise metadata-only 4-column
+    # ``UniqueConstraint``. Migration-built databases that include the
+    # SC-112173 corrective revision ``4f8c2d1a7b3e`` instead have the legacy
+    # 3-column ``_customer_location_uc`` removed; the revision repairs the
+    # ineffective removal attempted by ``df3d7e2eb9a4``. Seeding a NULL-schema
+    # twin here would dodge the test schema's constraint, but a NULL-schema row
+    # would not match the application check's identity predicate either. The
+    # restore-side check
     # ``DatasetDAO.has_active_logical_duplicate`` (called from
     # ``RestoreDatasetCommand.validate`` and the v1 importer) yields a clean
     # 422 instead of an opaque IntegrityError and guards any schema where the
-    # legacy constraint is eventually dropped for real; it is covered by
+    # legacy constraint is absent; it is covered by
     # ``tests/unit_tests/commands/dataset/restore_test.py::
     # test_restore_dataset_logical_duplicate_raises`` plus the catalog-
     # normalization tests in ``tests/unit_tests/dao/dataset_test.py``. The

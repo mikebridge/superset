@@ -36,7 +36,7 @@ import traceback
 import uuid
 import warnings
 import zlib
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Collection, Iterable, Iterator, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -683,12 +683,14 @@ def generic_find_fk_constraint_names(  # pylint: disable=invalid-name
 
 
 def generic_find_uq_constraint_name(
-    table: str, columns: set[str], insp: Inspector
+    table: str, columns: Collection[str], insp: Inspector
 ) -> str | None:
-    """Utility to find a unique constraint name in alembic migrations"""
+    """Find a unique constraint name in Alembic migrations."""
+
+    expected_columns = set(columns)
 
     for uq in insp.get_unique_constraints(table):
-        if columns == set(uq["column_names"]):
+        if expected_columns == set(uq["column_names"]):
             return uq["name"]
 
     return None

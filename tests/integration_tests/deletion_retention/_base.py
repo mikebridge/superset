@@ -22,6 +22,9 @@ Everything created is torn down (bypassing the soft-delete visibility
 filter) so a leftover soft-deleted row never trips a later test.
 """
 
+# Test builders deliberately control transaction boundaries.
+# pylint: disable=consider-using-transaction
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -109,7 +112,7 @@ class DeletionRetentionTestBase(SupersetTestCase):
 
     # -- assertions / lookups ----------------------------------------------
 
-    def exists(self, model: type, entity_id: int) -> bool:
+    def exists(self, model: Any, entity_id: int) -> bool:
         row = (
             db.session.query(model)
             .execution_options(**{SKIP_VISIBILITY_FILTER_CLASSES: {model}})
@@ -123,7 +126,7 @@ class DeletionRetentionTestBase(SupersetTestCase):
 
     # -- version-history forging (Stage 2) ---------------------------------
 
-    def forge_version_row(self, model: type, entity_id: int, tx_id: int) -> None:
+    def forge_version_row(self, model: Any, entity_id: int, tx_id: int) -> None:
         """Insert a version_transaction + parent shadow + version_changes row
         for *entity_id* anchored at *tx_id* (so a purge has history to remove
         without needing live capture to be enabled)."""
