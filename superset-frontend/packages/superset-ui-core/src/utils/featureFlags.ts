@@ -47,8 +47,6 @@ export enum FeatureFlag {
   EnableAdvancedDataTypes = 'ENABLE_ADVANCED_DATA_TYPES',
   EnableExtensions = 'ENABLE_EXTENSIONS',
   EnableViewers = 'ENABLE_VIEWERS',
-  /** @deprecated */
-  EnableJavascriptControls = 'ENABLE_JAVASCRIPT_CONTROLS',
   EnableTemplateProcessing = 'ENABLE_TEMPLATE_PROCESSING',
   EscapeMarkdownHtml = 'ESCAPE_MARKDOWN_HTML',
   EstimateQueryCost = 'ESTIMATE_QUERY_COST',
@@ -67,6 +65,7 @@ export enum FeatureFlag {
   TaggingSystem = 'TAGGING_SYSTEM',
   Thumbnails = 'THUMBNAILS',
   UseAnalogousColors = 'USE_ANALOGOUS_COLORS',
+  VersionHistory = 'VERSION_HISTORY',
   ForceSqlLabRunAsync = 'SQLLAB_FORCE_RUN_ASYNC',
   SlackEnableAvatars = 'SLACK_ENABLE_AVATARS',
   EnableDashboardScreenshotEndpoints = 'ENABLE_DASHBOARD_SCREENSHOT_ENDPOINTS',

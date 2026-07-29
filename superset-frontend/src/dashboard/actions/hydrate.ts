@@ -49,6 +49,7 @@ import {
   ROW_TYPE,
 } from 'src/dashboard/util/componentTypes';
 import findFirstParentContainerId from 'src/dashboard/util/findFirstParentContainer';
+import getDefaultActiveTabs from 'src/dashboard/util/getDefaultActiveTabs';
 import getEmptyLayout from 'src/dashboard/util/getEmptyLayout';
 import getLocationHash from 'src/dashboard/util/getLocationHash';
 import newComponentFactory, {
@@ -73,7 +74,7 @@ import {
 export const HYDRATE_DASHBOARD = 'HYDRATE_DASHBOARD';
 type AppDispatch = ThunkDispatch<RootState, undefined, AnyAction>;
 
-interface HydrateChartData {
+export interface HydrateChartData {
   slice_id: number;
   slice_url: string;
   slice_name: string;
@@ -85,7 +86,7 @@ interface HydrateChartData {
   changed_on: string;
 }
 
-interface HydrateDashboardData extends Dashboard {
+export interface HydrateDashboardData extends Dashboard {
   metadata: JsonObject;
   position_data: Record<string, LayoutItem> | null;
   [key: string]: unknown;
@@ -327,6 +328,19 @@ export const hydrateDashboard =
       metadata.cross_filters_enabled as boolean | undefined,
     );
 
+    // precedence: permalink param > stored redux value > layout default.
+    // The layout default only applies to a genuinely fresh load: no permalink
+    // activeTabs, no stored activeTabs, and no deep-link (directPathToChild),
+    // which the live Tabs component resolves on its own.
+    const seededActiveTabs =
+      activeTabs ||
+      (dashboardState?.activeTabs?.length
+        ? dashboardState.activeTabs
+        : undefined) ||
+      (directPathToChild.length
+        ? []
+        : getDefaultActiveTabs(dashboardLayout.present as DashboardLayout));
+
     return dispatch({
       type: HYDRATE_DASHBOARD,
       data: {
@@ -390,7 +404,7 @@ export const hydrateDashboard =
           lastModifiedTime: dashboard.changed_on,
           isRefreshing: false,
           isFiltersRefreshing: false,
-          activeTabs: activeTabs || dashboardState?.activeTabs || [],
+          activeTabs: seededActiveTabs,
           datasetsStatus:
             dashboardState?.datasetsStatus || ResourceStatus.Loading,
           chartStates: chartStates || dashboardState?.chartStates || {},

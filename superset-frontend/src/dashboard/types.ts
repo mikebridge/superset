@@ -123,6 +123,7 @@ export type DashboardState = {
   isFiltersRefreshing: boolean;
   hasUnsavedChanges: boolean;
   dashboardIsSaving: boolean;
+  lastModifiedTime?: number;
   colorScheme: string;
   sliceIds: number[];
   directPathLastUpdated: number;
@@ -169,6 +170,7 @@ export type DashboardState = {
 };
 export type DashboardInfo = {
   id: number;
+  uuid?: string;
   common: {
     conf: JsonObject;
   };
@@ -367,6 +369,9 @@ export interface SliceEntitiesState {
 
 export enum MenuKeys {
   DownloadAsImage = 'download_as_image',
+  DownloadAsPngTransparent = 'download_as_png_transparent',
+  DownloadAsPngSolid = 'download_as_png_solid',
+  DownloadAsPdf = 'download_as_pdf',
   ExploreChart = 'explore_chart',
   ExportCsv = 'export_csv',
   ExportPivotCsv = 'export_pivot_csv',
@@ -395,4 +400,5 @@ export enum MenuKeys {
   ManageEmailReports = 'manage_email_reports',
   ExportPivotXlsx = 'export_pivot_xlsx',
   EmbedCode = 'embed_code',
+  VersionHistory = 'version_history',
 }
