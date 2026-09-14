@@ -318,8 +318,39 @@ def _repeats_an_earlier_block(
     age-out (see :func:`_operational_candidates`), so an operator force-purge
     block is retained permanently — never pruned by either category.
     """
-    earlier: sa.FromClause = table.alias("earlier_block")
+    # Evaluated through the block IMMEDIATELY preceding this row rather than
+    # by searching every earlier same-reason block: the two are equivalent
+    # (a witness E with no reason change up to this row forces the preceding
+    # block P to share the reason and sit inside [E, this], so P is itself a
+    # witness), but the preceding-block form costs two correlated scalars and
+    # one range EXISTS per row instead of an EXISTS nested inside an EXISTS —
+    # O(index seeks) instead of O(history²) — which is what keeps the
+    # coordination-locked re-check short on a long multi-reason history
+    # (#43490 lock-hold-time review).
+    preceding: sa.FromClause = table.alias("preceding_block")
+    preceding_ts: sa.ScalarSelect = (
+        sa.select(sa.func.max(preceding.c.created_on))
+        .where(
+            preceding.c.status == STATUS_BLOCKED,
+            preceding.c.entity_type == table.c.entity_type,
+            preceding.c.entity_uuid == table.c.entity_uuid,
+            preceding.c.created_on < table.c.created_on,
+        )
+        .correlate(table)
+        .scalar_subquery()
+    )
+    boundary: sa.ScalarSelect = _streak_boundary_scalar(table, now)
     between: sa.FromClause = table.alias("reason_change")
+    # By construction no block lies strictly between the preceding block and
+    # this row, so this range holds only rows tied at either endpoint.
+    # Inclusive bounds: a differing-reason block sharing an exact timestamp
+    # with either endpoint still breaks the run, so a reason-transition row
+    # tied with a neighbour is preserved as a run head rather than pruned as
+    # a repeat (the same preserving-side tie rule the pending and evidence
+    # guards use). Inclusive bounds only ever add boundaries — i.e. only ever
+    # preserve more, never delete more. Every row at ``preceding_ts`` not
+    # excluded here therefore shares this row's reason (NULL-safe), which is
+    # the "repeats the block just before it" rule itself.
     reason_changed_between: sa.ColumnElement[bool] = sa.exists(
         sa.select(sa.literal(1))
         .select_from(between)
@@ -328,41 +359,21 @@ def _repeats_an_earlier_block(
                 between.c.status == STATUS_BLOCKED,
                 between.c.entity_type == table.c.entity_type,
                 between.c.entity_uuid == table.c.entity_uuid,
-                # Inclusive bounds: a differing-reason block sharing an
-                # exact timestamp with either endpoint still breaks the run,
-                # so a reason-transition row tied with a neighbour is
-                # preserved as a run head rather than pruned as a repeat
-                # (the same preserving-side tie rule the pending and evidence
-                # guards use). Inclusive bounds only ever add boundaries —
-                # i.e. only ever preserve more, never delete more.
-                between.c.created_on >= earlier.c.created_on,
+                between.c.created_on >= preceding_ts,
                 between.c.created_on <= table.c.created_on,
                 between.c.reason.is_distinct_from(table.c.reason),
             )
         )
-        .correlate(table, earlier)
-    )
-    repeats: sa.ColumnElement[bool] = sa.exists(
-        sa.select(sa.literal(1))
-        .select_from(earlier)
-        .where(
-            sa.and_(
-                earlier.c.status == STATUS_BLOCKED,
-                earlier.c.entity_type == table.c.entity_type,
-                earlier.c.entity_uuid == table.c.entity_uuid,
-                # ``earlier`` must itself be in the current streak; its
-                # boundary scalar correlates to ``earlier`` (not ``table``).
-                _in_current_streak(earlier, now),
-                earlier.c.created_on < table.c.created_on,
-                earlier.c.reason.is_not_distinct_from(table.c.reason),
-                sa.not_(reason_changed_between),
-            )
-        )
-        # Correlate the ``earlier`` EXISTS to ``table`` only. The boundary is
-        # no longer a passed subquery — it is a scalar correlated inside
-        # ``_in_current_streak(earlier, now)`` above, so it must not be
-        # co-correlated here.
         .correlate(table)
+    )
+    repeats: sa.ColumnElement[bool] = sa.and_(
+        # There is a preceding block, and it is in the current streak (a NULL
+        # boundary means the whole history is one current streak; a preceding
+        # block at or before the boundary makes this row the new streak's
+        # first block — a survivor).
+        preceding_ts.is_not(None),
+        sa.or_(boundary.is_(None), preceding_ts > boundary),
+        sa.not_(reason_changed_between),
     )
     # A ``force`` attempt is an operator action the writer never suppresses:
     # audit.py's ``_suppress_redundant_block`` only collapses consecutive
@@ -372,9 +383,9 @@ def _repeats_an_earlier_block(
     # it a survivor while its streak is current. It is also exempt from
     # operational age-out (``_operational_candidates`` excludes force blocks), so
     # a force block is retained permanently — full immortality for operator
-    # force-purge blocks. A force row may still be the *earlier* anchor a later
-    # scheduled repeat collapses into — only the force row itself is protected
-    # from duplicate removal.
+    # force-purge blocks. A force row may still be the *preceding* anchor a
+    # later scheduled repeat collapses into — only the force row itself is
+    # protected from duplicate removal.
     return sa.and_(table.c.trigger != TRIGGER_FORCE, repeats)
 
 

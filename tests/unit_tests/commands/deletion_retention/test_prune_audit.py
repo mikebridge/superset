@@ -310,9 +310,9 @@ def test_locked_recheck_is_a_select_and_delete_names_only_literal_ids() -> None:
 @pytest.mark.parametrize(
     ("dialect", "same_reason_operator"),
     [
-        (postgresql.dialect(), "IS NOT DISTINCT FROM"),
+        (postgresql.dialect(), "IS DISTINCT FROM"),
         (mysql.dialect(), "<=>"),
-        (sqlite.dialect(), " IS "),
+        (sqlite.dialect(), " IS NOT "),
     ],
 )
 def test_reason_comparison_is_null_safe_on_every_supported_dialect(
@@ -320,8 +320,11 @@ def test_reason_comparison_is_null_safe_on_every_supported_dialect(
 ) -> None:
     """Compare block reasons NULL-safely so pre-feature rows form a run.
 
-    A plain ``=`` would never match two reason-less rows, so every legacy
-    block would be its own survivor and the streak would never dedupe.
+    The repeat rule detects a *differing*-reason block between the preceding
+    block and the candidate; a plain ``<>`` would treat two reason-less rows
+    as differing (NULL <> NULL is unknown), so every legacy block would be its
+    own survivor and the streak would never dedupe. Assert the NULL-safe
+    operator each dialect renders for ``is_distinct_from``.
     """
     now: datetime = datetime(2026, 1, 1)
     for select_candidates in (
