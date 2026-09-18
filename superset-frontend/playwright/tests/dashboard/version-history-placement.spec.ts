@@ -136,7 +136,50 @@ for (const width of [1920, 1280]) {
             panelBox.x + panelBox.width <= width + 1
           );
         })
-        .toBe(true);
+        .toBe(true)
+        .catch(async error => {
+          const geometry = await page.evaluate(() => {
+            const describe = (element: Element | null) => {
+              if (!element) return null;
+              const style = getComputedStyle(element);
+              return {
+                rect: element.getBoundingClientRect().toJSON(),
+                position: style.position,
+                top: style.top,
+                height: style.height,
+                overflow: style.overflow,
+              };
+            };
+            const host = document.querySelector(
+              '[data-test="dashboard-version-history-column"]',
+            );
+            return {
+              viewport: { width: innerWidth, height: innerHeight },
+              scroll: { x: scrollX, y: scrollY },
+              document: {
+                width: document.documentElement.scrollWidth,
+                height: document.documentElement.scrollHeight,
+              },
+              column: describe(host),
+              panel: describe(host?.querySelector('aside') ?? null),
+              grid: describe(host?.parentElement ?? null),
+              content: describe(
+                document.querySelector(
+                  '[data-test="dashboard-content-wrapper"]',
+                ),
+              ),
+            };
+          });
+          await testWithAssets.info().attach('placement-geometry', {
+            body: JSON.stringify(
+              { ...geometry, header: await header.boundingBox() },
+              null,
+              2,
+            ),
+            contentType: 'application/json',
+          });
+          throw error;
+        });
 
       // A real click (not force/trial) proves the open panel doesn't cover
       // the header controls. Opening its menu must leave history open.
