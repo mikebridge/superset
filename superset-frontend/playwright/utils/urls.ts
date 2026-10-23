@@ -31,6 +31,7 @@ export const URL = {
   CHART_ADD: 'chart/add',
   CHART_LIST: 'chart/list/',
   DASHBOARD_LIST: 'dashboard/list/',
+  DATABASE_LIST: 'databaseview/list/',
   DATASET_LIST: 'tablemodelview/list',
   LOGIN: 'login/',
   SAVED_QUERIES_LIST: 'savedqueryview/list/',

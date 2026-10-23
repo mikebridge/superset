@@ -34,8 +34,10 @@ export const STUB_VIEW_NAME = 'orders';
 
 const ENDPOINTS = {
   SEMANTIC_LAYER: 'api/v1/semantic_layer/',
+  SEMANTIC_LAYER_TYPES: 'api/v1/semantic_layer/types',
   SEMANTIC_VIEW: 'api/v1/semantic_view/',
   DATASOURCE: 'api/v1/datasource/',
+  EXPLORE: 'api/v1/explore/',
 } as const;
 
 export interface StubSemanticView {
@@ -133,4 +135,141 @@ export async function apiDeleteSemanticLayer(
   options?: ApiRequestOptions,
 ): Promise<APIResponse> {
   return apiDelete(page, `${ENDPOINTS.SEMANTIC_LAYER}${layerUuid}`, options);
+}
+
+// ---------------------------------------------------------------------------
+// Generic semantic-layer helpers, used by the acceptance API driver
+// (playwright/acceptance/drivers/api). They take whatever provider the server
+// has registered rather than the stub above.
+// ---------------------------------------------------------------------------
+
+export interface SemanticLayerType {
+  id: string;
+  name: string;
+  description: string | null;
+}
+
+export interface SemanticLayerResult {
+  uuid: string;
+  name: string;
+  type: string;
+}
+
+export interface SemanticLayerCreatePayload {
+  name: string;
+  type: string;
+  configuration: Record<string, unknown>;
+  description?: string | null;
+}
+
+export interface AvailableSemanticView {
+  name: string;
+  already_added: boolean;
+}
+
+export interface SemanticViewCreatePayload {
+  name: string;
+  semantic_layer_uuid: string;
+  configuration?: Record<string, unknown>;
+}
+
+/** A semantic view as the combined datasource list exposes it. */
+export interface SemanticViewRow {
+  id: number;
+  uuid: string;
+  table_name: string;
+}
+
+export async function apiGetSemanticLayerTypes(
+  page: Page,
+): Promise<SemanticLayerType[]> {
+  const response = await apiGet(page, ENDPOINTS.SEMANTIC_LAYER_TYPES);
+  return (await response.json()).result ?? [];
+}
+
+export async function apiGetSemanticLayers(
+  page: Page,
+): Promise<SemanticLayerResult[]> {
+  const response = await apiGet(page, ENDPOINTS.SEMANTIC_LAYER);
+  return (await response.json()).result ?? [];
+}
+
+/** Creates a semantic layer and returns its uuid. */
+export async function apiPostSemanticLayer(
+  page: Page,
+  payload: SemanticLayerCreatePayload,
+): Promise<string> {
+  const response = await apiPost(page, ENDPOINTS.SEMANTIC_LAYER, payload);
+  return (await response.json()).result.uuid;
+}
+
+/** The views a semantic layer offers, as discovered from its provider. */
+export async function apiGetAvailableSemanticViews(
+  page: Page,
+  layerUuid: string,
+  runtimeData: Record<string, unknown> = {},
+): Promise<AvailableSemanticView[]> {
+  const response = await apiPost(
+    page,
+    `${ENDPOINTS.SEMANTIC_LAYER}${layerUuid}/views`,
+    { runtime_data: runtimeData },
+  );
+  return (await response.json()).result ?? [];
+}
+
+/** Adds semantic views. The endpoint is a bulk create and reports per-view errors. */
+export async function apiPostSemanticViews(
+  page: Page,
+  views: SemanticViewCreatePayload[],
+): Promise<{
+  created: Array<{ uuid: string; name: string }>;
+  errors?: Array<{ name: string; error: unknown }>;
+}> {
+  const response = await apiPost(page, ENDPOINTS.SEMANTIC_VIEW, { views });
+  return (await response.json()).result;
+}
+
+/**
+ * Semantic views with the given name. The semantic-view API has no GET, so
+ * this reads the combined datasource list, as the Datasets page does.
+ */
+export async function apiGetSemanticViewsByName(
+  page: Page,
+  name: string,
+): Promise<SemanticViewRow[]> {
+  const query = rison.encode({
+    filters: [{ col: 'table_name', opr: 'ct', value: name }],
+    page: 0,
+    page_size: 100,
+  });
+  const response = await apiGet(page, `${ENDPOINTS.DATASOURCE}?q=${query}`);
+  const rows: Array<SemanticViewRow & { kind: string }> = (
+    await response.json()
+  ).result;
+  return rows.filter(
+    row => row.kind === 'semantic_view' && row.table_name === name,
+  );
+}
+
+export async function apiDeleteSemanticView(
+  page: Page,
+  id: number,
+  options?: ApiRequestOptions,
+): Promise<APIResponse> {
+  return apiDelete(page, `${ENDPOINTS.SEMANTIC_VIEW}${id}`, options);
+}
+
+/** What Explore loads for a datasource: the same call the Explore page makes. */
+export async function apiGetExploreDataset(
+  page: Page,
+  datasourceType: string,
+  datasourceId: number,
+): Promise<{ name: string }> {
+  const response = await apiGet(page, ENDPOINTS.EXPLORE, {
+    params: {
+      datasource_type: datasourceType,
+      datasource_id: String(datasourceId),
+    },
+  });
+  return (await response.json()).result.dataset;
 }

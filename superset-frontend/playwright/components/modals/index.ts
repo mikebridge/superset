@@ -18,6 +18,7 @@
  */
 
 // Specific modal implementations
+export { AddSemanticViewModal } from './AddSemanticViewModal';
 export { ChartPropertiesModal } from './ChartPropertiesModal';
 export { ConfirmDialog } from './ConfirmDialog';
 export { DeleteConfirmationModal } from './DeleteConfirmationModal';
@@ -29,3 +30,4 @@ export { NativeFiltersConfigModal } from './NativeFiltersConfigModal';
 export { SaveChartModal } from './SaveChartModal';
 export { SaveDatasetModal } from './SaveDatasetModal';
 export { SaveQueryModal } from './SaveQueryModal';
+export { SemanticLayerModal } from './SemanticLayerModal';
