@@ -20,6 +20,7 @@
 import { Page, Locator } from '@playwright/test';
 import { Button, Table } from '../components/core';
 import { BulkSelect, BulkSelectActionKey } from '../components/ListView';
+import { AddSemanticViewModal } from '../components/modals/AddSemanticViewModal';
 import { gotoWithRetry } from '../helpers/navigation';
 import { URL } from '../utils/urls';
 
@@ -33,6 +34,9 @@ export class DatasetListPage {
 
   private static readonly SELECTORS = {
     DATASET_LINK: '[data-test="internal-link"]',
+    /** With SEMANTIC_LAYERS on, "+ Dataset" becomes a "New" menu. */
+    NEW_BUTTON: 'btn-create-new',
+    NEW_SEMANTIC_VIEW_ITEM: 'Semantic View',
   } as const;
 
   /**
@@ -167,6 +171,22 @@ export class DatasetListPage {
    */
   async clickAddDataset(): Promise<void> {
     await this.getAddDatasetButton().click();
+  }
+
+  /**
+   * Opens "New" → "Semantic View" and hands back the dialog.
+   * Only available when SEMANTIC_LAYERS is on.
+   */
+  async startNewSemanticView(): Promise<AddSemanticViewModal> {
+    await this.page.getByTestId(DatasetListPage.SELECTORS.NEW_BUTTON).click();
+    await this.page
+      .getByRole('menuitem', {
+        name: DatasetListPage.SELECTORS.NEW_SEMANTIC_VIEW_ITEM,
+      })
+      .click();
+    const modal = new AddSemanticViewModal(this.page);
+    await modal.waitForVisible();
+    return modal;
   }
 
   /**
