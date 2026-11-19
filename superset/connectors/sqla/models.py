@@ -104,7 +104,11 @@ from superset.exceptions import (
     SupersetSyntaxErrorException,
     SupersetTemplateException,
 )
-from superset.explorables.base import TimeGrainDict
+from superset.explorables.base import (
+    ExplorableCapabilities,
+    sql_capabilities,
+    TimeGrainDict,
+)
 from superset.jinja_context import (
     BaseTemplateProcessor,
     ExtraCache,
@@ -362,6 +366,11 @@ class BaseDatasource(
     # table can; semantic-layer abstractions cannot, since they only expose
     # pre-defined metrics and dimensions).
     supports_samples: bool = True
+
+    @property
+    def explorable_capabilities(self) -> ExplorableCapabilities:
+        """Declare SQL operations independently of access permissions."""
+        return sql_capabilities(rls=self.is_rls_supported)
 
     # Datasources that can answer "drill to detail" requests — i.e. fetch the
     # raw rows underlying a chart cell. Conceptually similar to ``samples``
@@ -630,6 +639,7 @@ class BaseDatasource(
     def data(self) -> ExplorableData:
         """Data representation of the datasource sent to the frontend"""
         return {
+            "declared_capabilities": self.explorable_capabilities.names,
             # simple fields
             "id": self.id,
             "uid": self.uid,

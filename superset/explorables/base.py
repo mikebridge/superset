@@ -24,13 +24,68 @@ including SQL datasets, saved queries, and semantic layer views.
 from __future__ import annotations
 
 from collections.abc import Hashable
+from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from typing import Any, Protocol, runtime_checkable, TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
     from superset.common.query_object import QueryObject
     from superset.models.helpers import QueryResult
     from superset.superset_typing import ExplorableData, QueryObjectDict
+
+
+class ExplorableCapability(str, Enum):
+    """Operations a source explicitly supports; these never grant access."""
+
+    RAW_ROWS = "raw_rows"
+    ADHOC_METRICS = "adhoc_metrics"
+    SAMPLES = "samples"
+    DRILL_TO_DETAIL = "drill_to_detail"
+    SQL_PREVIEW = "sql_preview"
+    ROW_LEVEL_SECURITY = "row_level_security"
+
+
+@dataclass(frozen=True)
+class ExplorableCapabilities:
+    """Closed host grants alongside the existing operator/provider declarations."""
+
+    supported: frozenset[ExplorableCapability] = frozenset()
+    supported_operators: frozenset[str] = frozenset()
+    features: frozenset[str] = frozenset()
+
+    @property
+    def names(self) -> list[str]:
+        """Return stable wire names for frontend consumers."""
+        return sorted(capability.value for capability in self.supported)
+
+
+def sql_capabilities(*, rls: bool) -> ExplorableCapabilities:
+    """Declare the operations implemented by SQL datasets and SQL Lab queries."""
+    from superset.utils.core import FilterOperator
+
+    grants: set[ExplorableCapability] = {
+        ExplorableCapability.RAW_ROWS,
+        ExplorableCapability.ADHOC_METRICS,
+        ExplorableCapability.SAMPLES,
+        ExplorableCapability.DRILL_TO_DETAIL,
+        ExplorableCapability.SQL_PREVIEW,
+    }
+    if rls:
+        grants.add(ExplorableCapability.ROW_LEVEL_SECURITY)
+    return ExplorableCapabilities(
+        frozenset(grants), frozenset(operator.value for operator in FilterOperator)
+    )
+
+
+def declared_capabilities(source: object) -> ExplorableCapabilities:
+    """Undeclared or malformed capabilities grant no operations."""
+    declaration: object = getattr(source, "explorable_capabilities", None)
+    return (
+        declaration
+        if isinstance(declaration, ExplorableCapabilities)
+        else ExplorableCapabilities()
+    )
 
 
 class TimeGrainDict(TypedDict):
@@ -191,6 +246,10 @@ class Explorable(Protocol):
     The protocol focuses on the essential methods and properties needed
     for query execution, caching, and security.
     """
+
+    @property
+    def explorable_capabilities(self) -> ExplorableCapabilities:
+        """Explicit supported operations and filters, independent of authorization."""
 
     # =========================================================================
     # Core Query Interface

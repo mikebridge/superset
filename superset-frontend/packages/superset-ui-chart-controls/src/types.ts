@@ -25,6 +25,7 @@ import type {
   CurrencyFormatter,
   Currency,
   DatasourceType,
+  Datasource,
   DataRecordValue,
   JsonObject,
   JsonValue,
@@ -70,6 +71,7 @@ export type ColumnMeta = Omit<Column, 'id'> & {
 } & AnyDict;
 
 export interface Dataset {
+  declared_capabilities?: Datasource['declared_capabilities'];
   semantic_selection_version?: string | null;
   id: number;
   type: DatasourceType;

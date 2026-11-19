@@ -3447,6 +3447,20 @@ def test_semantic_view_api_and_model_feature_parity(
     assert response.call_args.args == (200,)
     payload: dict[str, Any] = response.call_args.kwargs["result"]
     assert payload["capabilities"]["features"] == payload["semantic_view_features"]
+    from superset.semantic_layers.mapper import SUPPORTED_FILTER_OPERATORS
+
+    assert payload["capabilities"] == {
+        "is_rls_supported": False,
+        "query_language": None,
+        "supports_samples": False,
+        "supports_drill_to_detail": False,
+        "supports_adhoc_metrics": False,
+        "time_grains": semantic_view.get_time_grains(),
+        "supported_operators": sorted(SUPPORTED_FILTER_OPERATORS),
+        "features": payload["semantic_view_features"],
+        "declared": [],
+    }
+    assert payload["declared_capabilities"] == []
     assert payload["semantic_view_features"] == (
         [] if declarations is None else ["GROUP_LIMIT"]
     )

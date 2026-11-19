@@ -55,6 +55,14 @@ export interface Datasource {
    * explore picker-capability adapter — carries no provider identity.
    */
   semantic_view_features?: string[];
+  declared_capabilities?: (
+    | 'raw_rows'
+    | 'adhoc_metrics'
+    | 'samples'
+    | 'drill_to_detail'
+    | 'sql_preview'
+    | 'row_level_security'
+  )[];
   columns: Column[];
   metrics: Metric[];
   description?: string;

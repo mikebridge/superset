@@ -46,16 +46,19 @@ from superset.exceptions import (
     SupersetException,
     SupersetSecurityException,
 )
+from superset.explorables.base import (
+    declared_capabilities,
+    ExplorableCapabilities,
+    ExplorableCapability,
+)
 from superset.extensions import cache_manager
 from superset.models.sql_lab import Query
 from superset.semantic_layers.access import SemanticLayersDisabledError
-from superset.semantic_layers.capabilities import supported_view_features
 from superset.semantic_layers.dimension_resolution import AmbiguousDimensionError
 from superset.semantic_layers.exceptions import (
     SemanticLayerExecutionError,
     SemanticLayerQueryRejectedError,
 )
-from superset.semantic_layers.mapper import SUPPORTED_FILTER_OPERATORS
 from superset.semantic_layers.models import SemanticView
 from superset.superset_typing import FlaskResponse
 from superset.utils import json
@@ -63,7 +66,6 @@ from superset.utils.cache_keys import add_impersonation_cache_key_if_needed
 from superset.utils.core import (
     apply_max_row_limit,
     DatasourceType,
-    FilterOperator,
     parse_boolean_string,
     SqlExpressionType,
 )
@@ -1056,36 +1058,22 @@ class DatasourceRestApi(BaseSupersetApi):
 
         try:
             datasource = resolved.explorable
-            is_semantic_view = (
-                DatasourceType(datasource_type) == DatasourceType.SEMANTIC_VIEW
-            )
-            supported_operators = (
-                SUPPORTED_FILTER_OPERATORS
-                if is_semantic_view
-                else {op.value for op in FilterOperator}
-            )
-            features: list[str] = sorted(
-                feature.value
-                for feature in supported_view_features(
-                    getattr(
-                        getattr(datasource, "implementation", None), "features", None
-                    )
-                )
-            )
+            capabilities: ExplorableCapabilities = declared_capabilities(datasource)
             result = dict(datasource.data)
             result["capabilities"] = {
-                "is_rls_supported": datasource.is_rls_supported,
+                "is_rls_supported": ExplorableCapability.ROW_LEVEL_SECURITY
+                in capabilities.supported,
                 "query_language": datasource.query_language,
-                "supports_samples": getattr(datasource, "supports_samples", True),
-                "supports_drill_to_detail": getattr(
-                    datasource, "supports_drill_to_detail", True
-                ),
-                # Datasets accept ad-hoc metrics; semantic views reject them in the
-                # mapper, since the provider owns metric definitions.
-                "supports_adhoc_metrics": not is_semantic_view,
+                "supports_samples": ExplorableCapability.SAMPLES
+                in capabilities.supported,
+                "supports_drill_to_detail": ExplorableCapability.DRILL_TO_DETAIL
+                in capabilities.supported,
+                "supports_adhoc_metrics": ExplorableCapability.ADHOC_METRICS
+                in capabilities.supported,
                 "time_grains": datasource.get_time_grains(),
-                "supported_operators": sorted(supported_operators),
-                "features": features,
+                "supported_operators": sorted(capabilities.supported_operators),
+                "features": sorted(capabilities.features),
+                "declared": capabilities.names,
             }
             return self.response(200, result=result)
         except SupersetSecurityException as ex:

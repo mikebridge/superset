@@ -358,6 +358,7 @@ class ExplorableData(TypedDict, total=False):
     # provider declares; consumed by the explore UI to derive picker
     # capabilities. Absent for non-semantic explorables.
     semantic_view_features: list[str]
+    declared_capabilities: list[str]
 
     # Additional fields from SqlaTable and data_for_slices
     column_types: list["GenericDataType"]

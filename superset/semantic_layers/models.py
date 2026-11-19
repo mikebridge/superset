@@ -59,7 +59,7 @@ from superset.exceptions import (
     InvalidPostProcessingError,
     QueryObjectValidationError,
 )
-from superset.explorables.base import TimeGrainDict
+from superset.explorables.base import ExplorableCapabilities, TimeGrainDict
 from superset.extensions import db, encrypted_field_factory
 from superset.models.helpers import AuditMixinNullable, QueryResult
 from superset.result_set import stringify_extension_columns
@@ -334,6 +334,21 @@ class SemanticView(AuditMixinNullable, Model):
     # affordance from the chart 3-dots menu can return anything meaningful.
     supports_samples: bool = False
     supports_drill_to_detail: bool = False
+
+    @property
+    def explorable_capabilities(self) -> ExplorableCapabilities:
+        """Project supported provider features without implying raw SQL operations."""
+        from superset.semantic_layers.mapper import SUPPORTED_FILTER_OPERATORS
+
+        return ExplorableCapabilities(
+            supported_operators=frozenset(SUPPORTED_FILTER_OPERATORS),
+            features=frozenset(
+                feature.value
+                for feature in supported_view_features(
+                    getattr(self.implementation, "features", None)
+                )
+            ),
+        )
 
     # Semantic views have no dataset-level SQL predicate for fetching filter values.
     fetch_values_predicate: None = None
@@ -720,6 +735,7 @@ class SemanticView(AuditMixinNullable, Model):
 
         return {
             # core
+            "declared_capabilities": self.explorable_capabilities.names,
             "id": self.id,
             "uid": self.uid,
             "type": "semantic_view",

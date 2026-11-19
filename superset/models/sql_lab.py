@@ -59,7 +59,11 @@ from superset.exceptions import (
     SupersetParseError,
     SupersetSecurityException,
 )
-from superset.explorables.base import TimeGrainDict
+from superset.explorables.base import (
+    ExplorableCapabilities,
+    sql_capabilities,
+    TimeGrainDict,
+)
 from superset.jinja_context import BaseTemplateProcessor, get_template_processor
 from superset.models.helpers import (
     AuditMixinNullable,
@@ -135,6 +139,11 @@ class Query(
     # explicitly (rather than relying on a fail-open ``getattr`` default)
     # so every member of ``DatasourceDAO.sources`` carries the capability.
     supports_samples: bool = True
+
+    @property
+    def explorable_capabilities(self) -> ExplorableCapabilities:
+        """Declare SQL Lab operations independently of access permissions."""
+        return sql_capabilities(rls=self.is_rls_supported)
 
     id = Column(Integer, primary_key=True)
     client_id = Column(String(11), unique=True, nullable=False)
@@ -301,6 +310,7 @@ class Query(
             )
 
         return {
+            "declared_capabilities": self.explorable_capabilities.names,
             "time_grain_sqla": [
                 (g.duration, g.name) for g in self.database.grains() or []
             ],
