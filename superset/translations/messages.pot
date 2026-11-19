@@ -15705,6 +15705,9 @@ msgstr ""
 msgid "This chart only"
 msgstr ""
 
+msgid "This chart requires raw rows, which this data source does not support."
+msgstr ""
+
 msgid "This chart uses legacy color positions past the end of the selected color scheme, so its band colors cannot be previewed or edited here."
 msgstr ""
 
