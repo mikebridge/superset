@@ -103,6 +103,7 @@ interface TestDatasource {
 }
 
 const mockDatasource: TestDatasource = {
+  declared_capabilities: ['sql_preview'],
   id: 25,
   database: {
     id: 1,
@@ -158,6 +159,24 @@ const createProps = (
   }) as unknown as DatasourceControlComponentProps;
 
 const getDbWithQuery = 'glob:*/api/v1/database/?q=*';
+
+test.each([undefined, [], ['sql_preview']])(
+  'SQL Lab requires an explicit declaration, not table identity: %j',
+  async declared_capabilities => {
+    const props = createProps({
+      datasource: {
+        ...mockDatasource,
+        type: DatasourceType.Table,
+        declared_capabilities,
+      },
+    });
+    render(<DatasourceControl {...props} />, { useRouter: true });
+    await userEvent.click(await screen.findByTestId('datasource-menu-trigger'));
+    expect(!!screen.queryByText('View in SQL Lab')).toBe(
+      !!declared_capabilities?.includes('sql_preview'),
+    );
+  },
+);
 const getDatasetWithAll = 'glob:*/api/v1/dataset/*';
 const putDatasetWithAll = 'glob:*/api/v1/dataset/*';
 const getDatasetWithAllMockRouteName = `get${getDatasetWithAll}`;
@@ -774,7 +793,11 @@ test.each(
   async ({ type, saved }) => {
     const props = createProps({
       value: `25__${type}`,
-      datasource: { ...mockDatasource, type },
+      datasource: {
+        ...mockDatasource,
+        type,
+        declared_capabilities: type === 'semantic_view' ? [] : ['sql_preview'],
+      },
       form_data: saved ? { slice_id: 318 } : {},
     });
     render(<DatasourceControl {...props} />, { useRouter: true });

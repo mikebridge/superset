@@ -35,6 +35,87 @@ from superset.exceptions import (
     QueryObjectValidationError,
     QueryObjectValidationMessage,
 )
+from superset.explorables.base import (
+    declared_capabilities,
+    ExplorableCapabilities,
+    ExplorableCapability,
+)
+
+
+@pytest.mark.parametrize(
+    "grants", [None, frozenset(), frozenset({ExplorableCapability.SQL_PREVIEW})]
+)
+def test_histogram_requires_declared_raw_rows(
+    grants: frozenset[ExplorableCapability] | None,
+) -> None:
+    """Source kind cannot grant raw-row access by itself."""
+    context: Mock = Mock(spec=QueryContext)
+    context.form_data = {"viz_type": "histogram"}
+    context.datasource = Mock(spec=[])
+    if grants is not None:
+        context.datasource.explorable_capabilities = ExplorableCapabilities(grants)
+    with pytest.raises(ChartDataQueryValidationError, match="requires raw rows"):
+        ChartDataCommand(context).validate()
+    context.raise_for_access.assert_called_once()
+
+
+def test_histogram_accepts_any_source_declaring_raw_rows() -> None:
+    """Capability validation runs after, and does not replace, authorization."""
+    context: Mock = Mock(spec=QueryContext)
+    context.form_data = {"viz_type": "histogram"}
+    context.datasource = Mock(
+        explorable_capabilities=ExplorableCapabilities(
+            frozenset({ExplorableCapability.RAW_ROWS})
+        )
+    )
+    ChartDataCommand(context).validate()
+    context.raise_for_access.assert_called_once()
+
+
+def test_undeclared_capabilities_fail_closed() -> None:
+    """An external implementer without a declaration gains no operation."""
+    assert declared_capabilities(object()) == ExplorableCapabilities()
+
+
+def test_sql_sources_preserve_capabilities() -> None:
+    """Datasets and SQL Lab queries retain their existing capability payload."""
+    from inspect import unwrap
+    from unittest.mock import PropertyMock
+
+    from superset.connectors.sqla.models import SqlaTable
+    from superset.datasource.api import DatasourceRestApi
+    from superset.models.sql_lab import Query
+    from superset.utils.core import FilterOperator
+
+    source: SqlaTable | Query
+    for source in (SqlaTable(), Query()):
+        api: DatasourceRestApi = DatasourceRestApi()
+        response: Mock
+        with (
+            patch.object(
+                type(source), "data", new_callable=PropertyMock, return_value={}
+            ),
+            patch.object(type(source), "get_time_grains", return_value=[]),
+            patch.object(
+                api, "_resolve_for_query", return_value=Mock(explorable=source)
+            ),
+            patch.object(api, "response") as response,
+        ):
+            unwrap(DatasourceRestApi.datasource_info)(api, source.type, 1)
+        assert response.call_args.args == (200,)
+        assert response.call_args.kwargs["result"]["capabilities"] == {
+            "is_rls_supported": source.is_rls_supported,
+            "query_language": "sql",
+            "supports_samples": True,
+            "supports_drill_to_detail": True,
+            "supports_adhoc_metrics": True,
+            "time_grains": [],
+            "supported_operators": sorted(
+                operator.value for operator in FilterOperator
+            ),
+            "features": [],
+            "declared": source.explorable_capabilities.names,
+        }
 
 
 def _query_timing() -> QueryTiming:

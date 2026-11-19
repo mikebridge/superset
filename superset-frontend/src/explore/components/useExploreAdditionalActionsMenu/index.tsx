@@ -26,6 +26,7 @@ import React, {
   SetStateAction,
 } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useAppSelector } from 'src/views/store';
 import {
   isFeatureEnabled,
   FeatureFlag,
@@ -33,7 +34,6 @@ import {
   JsonObject,
   LatestQueryFormData,
   QueryFormData,
-  DatasourceType,
   Behavior,
   getChartMetadataRegistry,
 } from '@superset-ui/core';
@@ -385,6 +385,14 @@ export const useExploreAdditionalActionsMenu = (
   const theme = useTheme();
   const { addDangerToast, addSuccessToast, addWarningToast } = useToasts();
   const dispatch = useDispatch();
+  const supportsSqlPreview = useAppSelector(state => {
+    const source = state.explore?.datasource;
+    return (
+      !!source &&
+      `${source.id}__${source.type}` === latestQueryFormData.datasource &&
+      !!source.declared_capabilities?.includes('sql_preview')
+    );
+  });
   const [isDropdownVisible, setIsDropdownVisible] = useState(false);
   const [dashboardSearchTerm, setDashboardSearchTerm] = useState('');
   const deferredDashboardSearchTerm = useDeferredValue(dashboardSearchTerm);
@@ -478,8 +486,6 @@ export const useExploreAdditionalActionsMenu = (
     showReportModal,
     setCurrentReportDeleting,
   });
-
-  const { datasource } = latestQueryFormData;
 
   // Get dashboard menu items using the hook
   const dashboardMenuItems = useDashboardsMenuItems({
@@ -1176,10 +1182,7 @@ export const useExploreAdditionalActionsMenu = (
     });
 
     // Run in SQL Lab
-    if (
-      datasource &&
-      !datasource.endsWith(`__${DatasourceType.SemanticView}`)
-    ) {
+    if (supportsSqlPreview) {
       menuItems.push({
         key: MENU_KEYS.RUN_IN_SQL_LAB,
         label: t('Run in SQL Lab'),
@@ -1204,7 +1207,7 @@ export const useExploreAdditionalActionsMenu = (
     dashboardMenuItems,
     dashboardSearchTerm,
     deferredDashboardSearchTerm,
-    datasource,
+    supportsSqlPreview,
     dispatch,
     exportCSV,
     exportCSVPivoted,

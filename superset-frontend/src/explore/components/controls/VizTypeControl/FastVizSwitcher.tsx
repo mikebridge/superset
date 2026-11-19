@@ -18,11 +18,13 @@
  */
 import { memo, useMemo } from 'react';
 import { useSelector } from 'react-redux';
+import { useAppSelector } from 'src/views/store';
 import { t } from '@apache-superset/core/translation';
 import { css, SupersetTheme } from '@apache-superset/core/theme';
 import { Flex, Icons } from '@superset-ui/core/components';
 import { getChartKey } from 'src/explore/exploreUtils';
 import { ExplorePageState } from 'src/explore/types';
+import { supportsChart } from 'src/explore/chartRequirements';
 import { FastVizSwitcherProps } from './types';
 import { VizTile } from './VizTile';
 import { FEATURED_CHARTS, CUSTOM_CHART_ICONS } from './constants';
@@ -39,6 +41,9 @@ export const antdIconProps = {
 
 export const FastVizSwitcher = memo(
   ({ currentSelection, onChange }: FastVizSwitcherProps) => {
+    const capabilities = useAppSelector(
+      state => state.explore?.datasource?.declared_capabilities,
+    );
     const currentViz = useSelector<ExplorePageState, string | undefined>(
       state =>
         state.charts?.[getChartKey(state.explore)]?.latestQueryFormData
@@ -76,8 +81,8 @@ export const FastVizSwitcher = memo(
           ),
         });
       }
-      return vizTiles;
-    }, [currentSelection, currentViz]);
+      return vizTiles.filter(viz => supportsChart(viz.name, capabilities));
+    }, [currentSelection, currentViz, capabilities]);
 
     return (
       <Flex justify="space-between" gap={4} data-test="fast-viz-switcher">

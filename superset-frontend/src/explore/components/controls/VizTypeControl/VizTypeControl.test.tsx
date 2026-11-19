@@ -75,6 +75,7 @@ class MainPreset extends Preset {
       name: 'Legacy charts',
       plugins: [
         new TableChartPlugin().configure({ key: VizType.Table }),
+        new FeaturedTestChartPlugin().configure({ key: VizType.Histogram }),
         new FeaturedTestChartPlugin().configure({
           key: 'featured_test_chart',
         }),
@@ -143,6 +144,30 @@ describe('VizTypeControl', () => {
     cleanup();
     jest.clearAllMocks();
   });
+
+  test.each([undefined, [], ['raw_rows']])(
+    'Histogram requires raw rows, independent of source kind: %j',
+    async declared_capabilities => {
+      await waitForRenderWrapper(
+        { ...defaultProps, value: VizType.Histogram },
+        {
+          ...stateWithoutNativeFilters,
+          explore: {
+            datasource: { type: 'extension', declared_capabilities },
+          },
+        },
+      );
+      await userEvent.click(screen.getByRole('tab', { name: 'All charts' }));
+      const gallery = screen.getByTestId(getTestId('viz-row'));
+      // Both plugins have the same label; only one requires raw rows.
+      expect(
+        within(gallery).getAllByAltText('Featured Test Chart'),
+      ).toHaveLength(declared_capabilities?.includes('raw_rows') ? 2 : 1);
+      if (!declared_capabilities?.includes('raw_rows')) {
+        expect(screen.getByRole('button', { name: 'Select' })).toBeDisabled();
+      }
+    },
+  );
 
   test('Fast viz switcher tiles render', async () => {
     const props = {

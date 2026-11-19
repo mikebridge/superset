@@ -51,7 +51,15 @@ import path from 'path';
 const chartEndpoint = 'glob:*api/v1/chart/*';
 
 const EDIT_PROPERTIES_INITIAL_STATE = {
-  explore: { can_overwrite: true, can_add: true },
+  explore: {
+    can_overwrite: true,
+    can_add: true,
+    datasource: {
+      id: 49,
+      type: 'table',
+      declared_capabilities: ['sql_preview'],
+    },
+  },
 };
 
 fetchMock.get(chartEndpoint, { json: 'foo' });
@@ -890,7 +898,19 @@ describe('Additional actions tests', () => {
         datasource: `49__${type}`,
         slice_id: saved ? 318 : undefined,
       };
-      render(<ExploreHeader {...props} />, { useRedux: true });
+      render(<ExploreHeader {...props} />, {
+        useRedux: true,
+        initialState: {
+          explore: {
+            datasource: {
+              id: 49,
+              type,
+              declared_capabilities:
+                type === 'semantic_view' ? [] : ['sql_preview'],
+            },
+          },
+        },
+      });
       await userEvent.click(
         await screen.findByLabelText('Menu actions trigger'),
       );
@@ -909,6 +929,25 @@ describe('Additional actions tests', () => {
     expect(
       await screen.findByLabelText('Menu actions trigger'),
     ).toBeInTheDocument();
+  });
+
+  test('SQL preview declaration must belong to the queried datasource', async () => {
+    const props = createProps();
+    render(<ExploreHeader {...props} />, {
+      useRedux: true,
+      initialState: {
+        explore: {
+          datasource: {
+            id: 999,
+            type: 'table',
+            declared_capabilities: ['sql_preview'],
+          },
+        },
+      },
+    });
+    await userEvent.click(await screen.findByLabelText('Menu actions trigger'));
+    expect(await screen.findByText('View query')).toBeInTheDocument();
+    expect(screen.queryByText('Run in SQL Lab')).not.toBeInTheDocument();
   });
 
   test('Should open a menu', async () => {
@@ -1244,6 +1283,7 @@ describe('Additional actions tests', () => {
     const props = createProps();
     render(<ExploreHeader {...props} />, {
       useRedux: true,
+      initialState: EDIT_PROPERTIES_INITIAL_STATE,
     });
     expect(await screen.findByText('Save')).toBeInTheDocument();
 

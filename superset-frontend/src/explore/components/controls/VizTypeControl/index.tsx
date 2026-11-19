@@ -17,6 +17,8 @@
  * under the License.
  */
 import { useCallback, useState } from 'react';
+import { useAppSelector } from 'src/views/store';
+import { supportsChart } from 'src/explore/chartRequirements';
 import { t } from '@apache-superset/core/translation';
 import { getChartMetadataRegistry } from '@superset-ui/core';
 import { css, styled, SupersetTheme } from '@apache-superset/core/theme';
@@ -74,15 +76,21 @@ const VizTypeControl = ({
   // ensuring that the modal always opens to the correct category.
   const [modalKey, setModalKey] = useState(0);
   const [selectedViz, setSelectedViz] = useState<string | null>(initialValue);
+  const capabilities = useAppSelector(
+    state => state.explore?.datasource?.declared_capabilities,
+  );
+  const selectionSupported =
+    !!selectedViz && supportsChart(selectedViz, capabilities);
 
   const openModal = useCallback(() => {
     setShowModal(true);
   }, []);
 
   const onSubmit = useCallback(() => {
+    if (!selectionSupported) return;
     onChange(selectedViz);
     setShowModal(false);
-  }, [selectedViz, onChange]);
+  }, [selectedViz, onChange, selectionSupported]);
 
   const onCancel = useCallback(() => {
     setShowModal(false);
@@ -133,7 +141,7 @@ const VizTypeControl = ({
         onHide={onCancel}
         title={t('Select a visualization type')}
         primaryButtonName={t('Select')}
-        disablePrimaryButton={!selectedViz}
+        disablePrimaryButton={!selectionSupported}
         onHandledPrimaryAction={onSubmit}
         maxWidth={`${MAX_ADVISABLE_VIZ_GALLERY_WIDTH}px`}
         responsive

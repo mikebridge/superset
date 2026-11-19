@@ -28,6 +28,8 @@ import {
 } from 'react';
 
 import Fuse from 'fuse.js';
+import { useAppSelector } from 'src/views/store';
+import { supportsChart } from 'src/explore/chartRequirements';
 import cx from 'classnames';
 import { t } from '@apache-superset/core/translation';
 import {
@@ -489,6 +491,9 @@ export default function VizTypeGallery(props: VizTypeGalleryProps) {
   const isDarkMode = isThemeDark(theme);
   const { selectedViz, onChange, onDoubleClick, className, denyList } = props;
   const { mountedPluginMetadata } = usePluginContext();
+  const capabilities = useAppSelector(
+    state => state.explore?.datasource?.declared_capabilities,
+  );
   const searchInputRef = useRef<HTMLInputElement>();
   const [searchInputValue, setSearchInputValue] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(true);
@@ -502,13 +507,14 @@ export default function VizTypeGallery(props: VizTypeGalleryProps) {
     const result = Object.entries(mountedPluginMetadata)
       .map(([key, value]) => ({ key, value }))
       .filter(({ key }) => !denyList.includes(key))
+      .filter(({ key }) => supportsChart(key, capabilities))
       .filter(
         ({ value }) =>
           nativeFilterGate(value.behaviors || []) && !value.deprecated,
       )
       .sort((a, b) => a.value.name.localeCompare(b.value.name));
     return result;
-  }, [mountedPluginMetadata, denyList]);
+  }, [mountedPluginMetadata, denyList, capabilities]);
 
   const chartsByCategory = useMemo(() => {
     const result: Record<string, VizEntry[]> = {};

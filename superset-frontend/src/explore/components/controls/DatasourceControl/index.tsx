@@ -401,7 +401,7 @@ export default function DatasourceControl({
   if (
     !isMissingDatasource &&
     canAccessSqlLab &&
-    datasource.type !== DatasourceType.SemanticView
+    datasource.declared_capabilities?.includes('sql_preview')
   ) {
     defaultDatasourceMenuItems.push({
       key: VIEW_IN_SQL_LAB,
@@ -456,7 +456,10 @@ export default function DatasourceControl({
     },
   ];
 
-  if (canAccessSqlLab) {
+  if (
+    canAccessSqlLab &&
+    datasource.declared_capabilities?.includes('sql_preview')
+  ) {
     queryDatasourceMenuItems.push({
       key: VIEW_IN_SQL_LAB,
       label: (
