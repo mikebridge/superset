@@ -38,6 +38,7 @@ import TimeTableChartPlugin from 'src/visualizations/TimeTable';
 import {
   BigNumberTotalChartPlugin,
   EchartsAreaChartPlugin,
+  EchartsHistogramChartPlugin,
   EchartsMixedTimeseriesChartPlugin,
   EchartsPieChartPlugin,
   EchartsTimeseriesBarChartPlugin,
@@ -75,7 +76,7 @@ class MainPreset extends Preset {
       name: 'Legacy charts',
       plugins: [
         new TableChartPlugin().configure({ key: VizType.Table }),
-        new FeaturedTestChartPlugin().configure({ key: VizType.Histogram }),
+        new EchartsHistogramChartPlugin().configure({ key: VizType.Histogram }),
         new FeaturedTestChartPlugin().configure({
           key: 'featured_test_chart',
         }),
@@ -159,11 +160,14 @@ describe('VizTypeControl', () => {
       );
       await userEvent.click(screen.getByRole('tab', { name: 'All charts' }));
       const gallery = screen.getByTestId(getTestId('viz-row'));
-      // Both plugins have the same label; only one requires raw rows.
-      expect(
-        within(gallery).getAllByAltText('Featured Test Chart'),
-      ).toHaveLength(declared_capabilities?.includes('raw_rows') ? 2 : 1);
-      if (!declared_capabilities?.includes('raw_rows')) {
+      expect(!!within(gallery).queryByAltText('Histogram')).toBe(
+        declared_capabilities === undefined ||
+          declared_capabilities.includes('raw_rows'),
+      );
+      if (
+        declared_capabilities &&
+        !declared_capabilities.includes('raw_rows')
+      ) {
         expect(screen.getByRole('button', { name: 'Select' })).toBeDisabled();
       }
     },

@@ -103,7 +103,7 @@ interface TestDatasource {
 }
 
 const mockDatasource: TestDatasource = {
-  declared_capabilities: ['sql_preview'],
+  declared_capabilities: ['sql_lab'],
   id: 25,
   database: {
     id: 1,
@@ -160,8 +160,8 @@ const createProps = (
 
 const getDbWithQuery = 'glob:*/api/v1/database/?q=*';
 
-test.each([undefined, [], ['sql_preview']])(
-  'SQL Lab requires an explicit declaration, not table identity: %j',
+test.each([undefined, [], ['sql_lab']])(
+  'SQL Lab preserves legacy-server behavior but honors explicit declarations: %j',
   async declared_capabilities => {
     const props = createProps({
       datasource: {
@@ -173,10 +173,24 @@ test.each([undefined, [], ['sql_preview']])(
     render(<DatasourceControl {...props} />, { useRouter: true });
     await userEvent.click(await screen.findByTestId('datasource-menu-trigger'));
     expect(!!screen.queryByText('View in SQL Lab')).toBe(
-      !!declared_capabilities?.includes('sql_preview'),
+      declared_capabilities === undefined ||
+        declared_capabilities.includes('sql_lab'),
     );
   },
 );
+
+test('legacy semantic metadata still hides SQL Lab without a capability field', async () => {
+  const props = createProps({
+    datasource: {
+      ...mockDatasource,
+      type: DatasourceType.SemanticView,
+      declared_capabilities: undefined,
+    },
+  });
+  render(<DatasourceControl {...props} />, { useRouter: true });
+  await userEvent.click(await screen.findByTestId('datasource-menu-trigger'));
+  expect(screen.queryByText('View in SQL Lab')).not.toBeInTheDocument();
+});
 const getDatasetWithAll = 'glob:*/api/v1/dataset/*';
 const putDatasetWithAll = 'glob:*/api/v1/dataset/*';
 const getDatasetWithAllMockRouteName = `get${getDatasetWithAll}`;
@@ -796,7 +810,7 @@ test.each(
       datasource: {
         ...mockDatasource,
         type,
-        declared_capabilities: type === 'semantic_view' ? [] : ['sql_preview'],
+        declared_capabilities: type === 'semantic_view' ? [] : ['sql_lab'],
       },
       form_data: saved ? { slice_id: 318 } : {},
     });

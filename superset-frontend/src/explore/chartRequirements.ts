@@ -16,20 +16,27 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Datasource, VizType } from '@superset-ui/core';
+import {
+  Datasource,
+  DatasourceType,
+  getChartMetadataRegistry,
+} from '@superset-ui/core';
 
-// Mirrored by ChartDataCommand: the backend enforces this for direct requests.
-const requirements: Partial<
-  Record<string, NonNullable<Datasource['declared_capabilities']>>
-> = {
-  [VizType.Histogram]: ['raw_rows'],
-};
+/** Missing declarations identify a legacy server; an explicit list is authoritative. */
+export function supportsSqlLab(
+  source: Pick<Datasource, 'type' | 'declared_capabilities'>,
+): boolean {
+  return source.declared_capabilities === undefined
+    ? source.type !== DatasourceType.SemanticView
+    : source.declared_capabilities.includes('sql_lab');
+}
 
 export function supportsChart(
   vizType: string,
   capabilities: Datasource['declared_capabilities'],
 ): boolean {
-  return (requirements[vizType] ?? []).every(capability =>
-    capabilities?.includes(capability),
-  );
+  if (capabilities === undefined) return true;
+  return (
+    getChartMetadataRegistry().get(vizType)?.requiredCapabilities ?? []
+  ).every(capability => capabilities.includes(capability));
 }

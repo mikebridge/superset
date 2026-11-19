@@ -61,6 +61,7 @@ from superset.exceptions import (
 )
 from superset.explorables.base import (
     ExplorableCapabilities,
+    ExplorableCapability,
     sql_capabilities,
     TimeGrainDict,
 )
@@ -138,12 +139,15 @@ class Query(
     # Query results are raw rows, so samples are meaningful. Declared
     # explicitly (rather than relying on a fail-open ``getattr`` default)
     # so every member of ``DatasourceDAO.sources`` carries the capability.
-    supports_samples: bool = True
+    @property
+    def supports_samples(self) -> bool:
+        """Legacy projection of the declared sampling operation."""
+        return ExplorableCapability.SAMPLES in self.explorable_capabilities.supported
 
     @property
     def explorable_capabilities(self) -> ExplorableCapabilities:
         """Declare SQL Lab operations independently of access permissions."""
-        return sql_capabilities(rls=self.is_rls_supported)
+        return sql_capabilities()
 
     id = Column(Integer, primary_key=True)
     client_id = Column(String(11), unique=True, nullable=False)

@@ -42,8 +42,7 @@ class ExplorableCapability(str, Enum):
     ADHOC_METRICS = "adhoc_metrics"
     SAMPLES = "samples"
     DRILL_TO_DETAIL = "drill_to_detail"
-    SQL_PREVIEW = "sql_preview"
-    ROW_LEVEL_SECURITY = "row_level_security"
+    SQL_LAB = "sql_lab"
 
 
 @dataclass(frozen=True)
@@ -60,7 +59,7 @@ class ExplorableCapabilities:
         return sorted(capability.value for capability in self.supported)
 
 
-def sql_capabilities(*, rls: bool) -> ExplorableCapabilities:
+def sql_capabilities() -> ExplorableCapabilities:
     """Declare the operations implemented by SQL datasets and SQL Lab queries."""
     from superset.utils.core import FilterOperator
 
@@ -69,17 +68,19 @@ def sql_capabilities(*, rls: bool) -> ExplorableCapabilities:
         ExplorableCapability.ADHOC_METRICS,
         ExplorableCapability.SAMPLES,
         ExplorableCapability.DRILL_TO_DETAIL,
-        ExplorableCapability.SQL_PREVIEW,
+        ExplorableCapability.SQL_LAB,
     }
-    if rls:
-        grants.add(ExplorableCapability.ROW_LEVEL_SECURITY)
     return ExplorableCapabilities(
         frozenset(grants), frozenset(operator.value for operator in FilterOperator)
     )
 
 
 def declared_capabilities(source: object) -> ExplorableCapabilities:
-    """Undeclared or malformed capabilities grant no operations."""
+    """Adapt an optional host declaration; older implementers grant no operations.
+
+    This extension is intentionally not required by the Explorable protocol.
+    SDK providers use the host SemanticView adapter, not this extension directly.
+    """
     declaration: object = getattr(source, "explorable_capabilities", None)
     return (
         declaration
@@ -246,10 +247,6 @@ class Explorable(Protocol):
     The protocol focuses on the essential methods and properties needed
     for query execution, caching, and security.
     """
-
-    @property
-    def explorable_capabilities(self) -> ExplorableCapabilities:
-        """Explicit supported operations and filters, independent of authorization."""
 
     # =========================================================================
     # Core Query Interface

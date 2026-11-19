@@ -1061,8 +1061,7 @@ class DatasourceRestApi(BaseSupersetApi):
             capabilities: ExplorableCapabilities = declared_capabilities(datasource)
             result = dict(datasource.data)
             result["capabilities"] = {
-                "is_rls_supported": ExplorableCapability.ROW_LEVEL_SECURITY
-                in capabilities.supported,
+                "is_rls_supported": datasource.is_rls_supported,
                 "query_language": datasource.query_language,
                 "supports_samples": ExplorableCapability.SAMPLES
                 in capabilities.supported,

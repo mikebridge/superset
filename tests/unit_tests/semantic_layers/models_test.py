@@ -938,8 +938,8 @@ def test_semantic_view_data(
 
 
 def test_semantic_view_supports_samples_is_false() -> None:
-    """The class-level flag opts SemanticView out of the Samples affordance."""
-    assert SemanticView.supports_samples is False
+    """The empty operation set opts SemanticView out without provider discovery."""
+    assert SemanticView().supports_samples is False
 
 
 def test_semantic_view_abc_features_default_empty() -> None:
@@ -1221,8 +1221,8 @@ def test_semantic_view_data_populates_time_grain_sqla(
 
 
 def test_semantic_view_supports_drill_to_detail_is_false() -> None:
-    """The class-level flag opts SemanticView out of Drill to detail."""
-    assert SemanticView.supports_drill_to_detail is False
+    """The empty operation set opts SemanticView out without provider discovery."""
+    assert SemanticView().supports_drill_to_detail is False
 
 
 def test_semantic_view_get_query_result(

@@ -57,7 +57,7 @@ const EDIT_PROPERTIES_INITIAL_STATE = {
     datasource: {
       id: 49,
       type: 'table',
-      declared_capabilities: ['sql_preview'],
+      declared_capabilities: ['sql_lab'],
     },
   },
 };
@@ -906,7 +906,7 @@ describe('Additional actions tests', () => {
               id: 49,
               type,
               declared_capabilities:
-                type === 'semantic_view' ? [] : ['sql_preview'],
+                type === 'semantic_view' ? [] : ['sql_lab'],
             },
           },
         },
@@ -940,7 +940,7 @@ describe('Additional actions tests', () => {
           datasource: {
             id: 999,
             type: 'table',
-            declared_capabilities: ['sql_preview'],
+            declared_capabilities: ['sql_lab'],
           },
         },
       },

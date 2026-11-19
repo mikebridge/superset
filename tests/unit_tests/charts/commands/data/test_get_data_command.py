@@ -42,32 +42,14 @@ from superset.explorables.base import (
 )
 
 
-@pytest.mark.parametrize(
-    "grants", [None, frozenset(), frozenset({ExplorableCapability.SQL_PREVIEW})]
-)
-def test_histogram_requires_declared_raw_rows(
-    grants: frozenset[ExplorableCapability] | None,
+@pytest.mark.parametrize("viz_type", [None, "histogram", "table"])
+def test_chart_validation_does_not_treat_viz_type_as_enforcement(
+    viz_type: str | None,
 ) -> None:
-    """Source kind cannot grant raw-row access by itself."""
+    """Query-shape enforcement is not implemented by this capability prototype."""
     context: Mock = Mock(spec=QueryContext)
-    context.form_data = {"viz_type": "histogram"}
-    context.datasource = Mock(spec=[])
-    if grants is not None:
-        context.datasource.explorable_capabilities = ExplorableCapabilities(grants)
-    with pytest.raises(ChartDataQueryValidationError, match="requires raw rows"):
-        ChartDataCommand(context).validate()
-    context.raise_for_access.assert_called_once()
-
-
-def test_histogram_accepts_any_source_declaring_raw_rows() -> None:
-    """Capability validation runs after, and does not replace, authorization."""
-    context: Mock = Mock(spec=QueryContext)
-    context.form_data = {"viz_type": "histogram"}
-    context.datasource = Mock(
-        explorable_capabilities=ExplorableCapabilities(
-            frozenset({ExplorableCapability.RAW_ROWS})
-        )
-    )
+    context.form_data = {"viz_type": viz_type}
+    context.datasource = Mock(explorable_capabilities=ExplorableCapabilities())
     ChartDataCommand(context).validate()
     context.raise_for_access.assert_called_once()
 
@@ -75,6 +57,30 @@ def test_histogram_accepts_any_source_declaring_raw_rows() -> None:
 def test_undeclared_capabilities_fail_closed() -> None:
     """An external implementer without a declaration gains no operation."""
     assert declared_capabilities(object()) == ExplorableCapabilities()
+
+
+def test_legacy_sample_fields_follow_declarations() -> None:
+    """An old frontend sees the same grants as a new frontend, not duplicate flags."""
+    from unittest.mock import PropertyMock
+
+    from superset.connectors.sqla.models import SqlaTable
+    from superset.semantic_layers.models import SemanticView
+
+    dataset: SqlaTable = SqlaTable()
+    with patch.object(
+        SqlaTable,
+        "explorable_capabilities",
+        new_callable=PropertyMock,
+        return_value=ExplorableCapabilities(),
+    ):
+        assert dataset.supports_samples is False
+        assert dataset.supports_drill_to_detail is False
+    view: SemanticView = SemanticView()
+    with patch.object(
+        SemanticView, "supported_operations", frozenset({ExplorableCapability.SAMPLES})
+    ):
+        assert view.supports_samples is True
+        assert view.supports_drill_to_detail is False
 
 
 def test_sql_sources_preserve_capabilities() -> None:
@@ -104,7 +110,7 @@ def test_sql_sources_preserve_capabilities() -> None:
             unwrap(DatasourceRestApi.datasource_info)(api, source.type, 1)
         assert response.call_args.args == (200,)
         assert response.call_args.kwargs["result"]["capabilities"] == {
-            "is_rls_supported": source.is_rls_supported,
+            "is_rls_supported": isinstance(source, SqlaTable),
             "query_language": "sql",
             "supports_samples": True,
             "supports_drill_to_detail": True,

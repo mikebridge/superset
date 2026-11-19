@@ -30,13 +30,8 @@ from superset.common.chart_data import ChartDataResultType
 from superset.common.chart_data_timing import ChartDataExecutionResult
 from superset.common.query_context import QueryContext
 from superset.exceptions import CacheLoadError, QueryObjectValidationMessage
-from superset.explorables.base import declared_capabilities, ExplorableCapability
 
 logger = logging.getLogger(__name__)
-
-CHART_REQUIREMENTS: dict[str, frozenset[ExplorableCapability]] = {
-    "histogram": frozenset({ExplorableCapability.RAW_ROWS}),
-}
 
 
 class ChartDataCommand(BaseCommand):
@@ -132,16 +127,3 @@ class ChartDataCommand(BaseCommand):
 
     def validate(self) -> None:
         self._query_context.raise_for_access()
-        form_data: dict[str, Any] = self._query_context.form_data or {}
-        required: frozenset[ExplorableCapability] = CHART_REQUIREMENTS.get(
-            form_data.get("viz_type", ""), frozenset()
-        )
-        if required and not required.issubset(
-            declared_capabilities(self._query_context.datasource).supported
-        ):
-            raise ChartDataQueryValidationError(
-                _(
-                    "This chart requires raw rows, "
-                    "which this data source does not support."
-                )
-            )

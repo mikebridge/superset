@@ -106,6 +106,7 @@ from superset.exceptions import (
 )
 from superset.explorables.base import (
     ExplorableCapabilities,
+    ExplorableCapability,
     sql_capabilities,
     TimeGrainDict,
 )
@@ -365,17 +366,26 @@ class BaseDatasource(
     # Datasources that can return raw row samples (anything backed by a SQL
     # table can; semantic-layer abstractions cannot, since they only expose
     # pre-defined metrics and dimensions).
-    supports_samples: bool = True
+    @property
+    def supports_samples(self) -> bool:
+        """Legacy projection of the declared sampling operation."""
+        return ExplorableCapability.SAMPLES in self.explorable_capabilities.supported
 
     @property
     def explorable_capabilities(self) -> ExplorableCapabilities:
         """Declare SQL operations independently of access permissions."""
-        return sql_capabilities(rls=self.is_rls_supported)
+        return sql_capabilities()
 
     # Datasources that can answer "drill to detail" requests — i.e. fetch the
     # raw rows underlying a chart cell. Conceptually similar to ``samples``
     # but kept as a separate capability so the two can diverge.
-    supports_drill_to_detail: bool = True
+    @property
+    def supports_drill_to_detail(self) -> bool:
+        """Legacy projection of the declared drill operation."""
+        return (
+            ExplorableCapability.DRILL_TO_DETAIL
+            in self.explorable_capabilities.supported
+        )
 
     @property
     def name(self) -> str:

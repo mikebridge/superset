@@ -53,6 +53,7 @@ import ViewQuery from 'src/explore/components/controls/ViewQuery';
 import { SaveDatasetModal } from 'src/SqlLab/components/SaveDatasetModal';
 import { safeStringify } from 'src/utils/safeStringify';
 import { datasetLabelLower } from 'src/features/semanticLayers/label';
+import { supportsSqlLab } from 'src/explore/chartRequirements';
 import { Link } from 'react-router-dom';
 import getBootstrapData from 'src/utils/getBootstrapData';
 
@@ -398,11 +399,7 @@ export default function DatasourceControl({
     label: t('Swap %s', datasetLabelLower()),
   });
 
-  if (
-    !isMissingDatasource &&
-    canAccessSqlLab &&
-    datasource.declared_capabilities?.includes('sql_preview')
-  ) {
+  if (!isMissingDatasource && canAccessSqlLab && supportsSqlLab(datasource)) {
     defaultDatasourceMenuItems.push({
       key: VIEW_IN_SQL_LAB,
       label: (
@@ -456,10 +453,7 @@ export default function DatasourceControl({
     },
   ];
 
-  if (
-    canAccessSqlLab &&
-    datasource.declared_capabilities?.includes('sql_preview')
-  ) {
+  if (canAccessSqlLab && supportsSqlLab(datasource)) {
     queryDatasourceMenuItems.push({
       key: VIEW_IN_SQL_LAB,
       label: (

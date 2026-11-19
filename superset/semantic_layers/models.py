@@ -59,7 +59,11 @@ from superset.exceptions import (
     InvalidPostProcessingError,
     QueryObjectValidationError,
 )
-from superset.explorables.base import ExplorableCapabilities, TimeGrainDict
+from superset.explorables.base import (
+    ExplorableCapabilities,
+    ExplorableCapability,
+    TimeGrainDict,
+)
 from superset.extensions import db, encrypted_field_factory
 from superset.models.helpers import AuditMixinNullable, QueryResult
 from superset.result_set import stringify_extension_columns
@@ -328,12 +332,20 @@ class SemanticView(AuditMixinNullable, Model):
     """
 
     __tablename__ = "semantic_views"
+    supported_operations: frozenset[ExplorableCapability] = frozenset()
 
     # Semantic views expose pre-defined metrics and dimensions, not raw rows,
     # so neither the "Samples" tab in Explore nor the "Drill to detail"
     # affordance from the chart 3-dots menu can return anything meaningful.
-    supports_samples: bool = False
-    supports_drill_to_detail: bool = False
+    @property
+    def supports_samples(self) -> bool:
+        """Legacy projection of the declared sampling operation."""
+        return ExplorableCapability.SAMPLES in self.supported_operations
+
+    @property
+    def supports_drill_to_detail(self) -> bool:
+        """Legacy projection of the declared drill operation."""
+        return ExplorableCapability.DRILL_TO_DETAIL in self.supported_operations
 
     @property
     def explorable_capabilities(self) -> ExplorableCapabilities:
@@ -341,6 +353,7 @@ class SemanticView(AuditMixinNullable, Model):
         from superset.semantic_layers.mapper import SUPPORTED_FILTER_OPERATORS
 
         return ExplorableCapabilities(
+            supported=self.supported_operations,
             supported_operators=frozenset(SUPPORTED_FILTER_OPERATORS),
             features=frozenset(
                 feature.value

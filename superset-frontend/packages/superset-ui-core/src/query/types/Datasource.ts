@@ -60,8 +60,7 @@ export interface Datasource {
     | 'adhoc_metrics'
     | 'samples'
     | 'drill_to_detail'
-    | 'sql_preview'
-    | 'row_level_security'
+    | 'sql_lab'
   )[];
   columns: Column[];
   metrics: Metric[];

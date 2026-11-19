@@ -27,6 +27,7 @@ import React, {
 } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useAppSelector } from 'src/views/store';
+import { supportsSqlLab } from 'src/explore/chartRequirements';
 import {
   isFeatureEnabled,
   FeatureFlag,
@@ -385,12 +386,12 @@ export const useExploreAdditionalActionsMenu = (
   const theme = useTheme();
   const { addDangerToast, addSuccessToast, addWarningToast } = useToasts();
   const dispatch = useDispatch();
-  const supportsSqlPreview = useAppSelector(state => {
+  const canOpenSqlLab = useAppSelector(state => {
     const source = state.explore?.datasource;
     return (
       !!source &&
       `${source.id}__${source.type}` === latestQueryFormData.datasource &&
-      !!source.declared_capabilities?.includes('sql_preview')
+      supportsSqlLab(source)
     );
   });
   const [isDropdownVisible, setIsDropdownVisible] = useState(false);
@@ -1182,7 +1183,7 @@ export const useExploreAdditionalActionsMenu = (
     });
 
     // Run in SQL Lab
-    if (supportsSqlPreview) {
+    if (canOpenSqlLab) {
       menuItems.push({
         key: MENU_KEYS.RUN_IN_SQL_LAB,
         label: t('Run in SQL Lab'),
@@ -1207,7 +1208,7 @@ export const useExploreAdditionalActionsMenu = (
     dashboardMenuItems,
     dashboardSearchTerm,
     deferredDashboardSearchTerm,
-    supportsSqlPreview,
+    canOpenSqlLab,
     dispatch,
     exportCSV,
     exportCSVPivoted,

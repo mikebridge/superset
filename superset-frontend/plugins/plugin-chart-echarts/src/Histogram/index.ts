@@ -50,6 +50,7 @@ export default class EchartsHistogramChartPlugin extends ChartPlugin<
       controlPanel,
       loadChart: () => import('./Histogram'),
       metadata: new ChartMetadata({
+        requiredCapabilities: ['raw_rows'],
         credits: ['https://echarts.apache.org'],
         category: t('Distribution'),
         description: t(

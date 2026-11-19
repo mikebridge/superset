@@ -19,6 +19,7 @@
 
 import { Behavior, ChartLabel } from '../types/Base';
 import { ParseMethod } from '../../connection';
+import { Datasource } from '../../query/types/Datasource';
 
 interface LookupTable {
   [key: string]: boolean;
@@ -31,6 +32,8 @@ export interface ExampleImage {
 }
 
 export interface ChartMetadataConfig {
+  // Picker affordances only; query execution validates its own supported shapes.
+  requiredCapabilities?: Datasource['declared_capabilities'];
   name: string;
   canBeAnnotationTypes?: string[];
   credits?: string[];
@@ -63,6 +66,7 @@ export interface ChartMetadataConfig {
 }
 
 export default class ChartMetadata {
+  requiredCapabilities: NonNullable<Datasource['declared_capabilities']>;
   name: string;
 
   canBeAnnotationTypes?: string[];
@@ -110,6 +114,7 @@ export default class ChartMetadata {
   constructor(config: ChartMetadataConfig) {
     const {
       name,
+      requiredCapabilities = [],
       canBeAnnotationTypes = [],
       credits = [],
       description = '',
@@ -133,6 +138,7 @@ export default class ChartMetadata {
     } = config;
 
     this.name = name;
+    this.requiredCapabilities = requiredCapabilities;
     this.credits = credits;
     this.description = description;
     this.canBeAnnotationTypes = canBeAnnotationTypes;
