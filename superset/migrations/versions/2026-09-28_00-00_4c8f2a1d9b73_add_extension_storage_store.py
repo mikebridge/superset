@@ -17,7 +17,7 @@
 """Add a secrets store alongside persistent extension storage.
 
 Revision ID: 4c8f2a1d9b73
-Revises: b8f3a2c91d64
+Revises: dfa683969f48
 Create Date: 2026-09-28 00:00:00.000000
 """
 
@@ -25,7 +25,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "4c8f2a1d9b73"
-down_revision = "b8f3a2c91d64"
+down_revision = "dfa683969f48"
 
 _LOOKUP_COLUMNS = [
     "extension_id",

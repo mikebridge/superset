@@ -113,6 +113,22 @@ test('discards pending completions when the connection attempt changes', () => {
   expect(onComplete).toHaveBeenCalledTimes(2);
 });
 
+test('a handled attempt is not rerun after switching away and back', () => {
+  // Master's listener (#40292) remembered the last handled tab ID across
+  // listener lifetimes; a delayed notification for it must not rerun.
+  const onComplete = jest.fn().mockReturnValue(true);
+  const { rerender } = renderHook(
+    ({ tabId }: { tabId: string }) => useOAuth2Completion(tabId, onComplete),
+    { initialProps: { tabId: 'attempt' } },
+  );
+  notify('broadcast');
+  expect(onComplete).toHaveBeenCalledTimes(1);
+  rerender({ tabId: 'other-attempt' });
+  rerender({ tabId: 'attempt' });
+  notify('storage');
+  expect(onComplete).toHaveBeenCalledTimes(1);
+});
+
 test('does not retry a deferred completion after unmount', () => {
   const onComplete = jest.fn().mockReturnValue(false);
   const { unmount } = renderHook(() =>

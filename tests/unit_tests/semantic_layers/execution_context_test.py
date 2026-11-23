@@ -104,8 +104,9 @@ def test_connection_credentials_cache_keys(
         "col_values:ef5f1012d43907f9aeed4b06bc9f847dfe2d6bf2117d7ecaf806d1a484df5bff",
         # Compatibility identity includes the requesting user and changed_on.
         "compatible:351b2fd9f6ac71f0b838d50f784023f4072f37aef78f08205f4b0f492a49520f",
-        # Chart keys also include the requesting user's OAuth cache partition.
-        "14ee069dbffd0f7ca50bb720f7d2b9b1d2d4ade37cf50661e33562913dba0e6a",
+        # Chart keys include semantic-null-filters-v2 and the requesting user's
+        # OAuth cache partition; the execution-context contract adds nothing.
+        "42f6e7cf8a530cf1b763bb1ff4dad28fcffcd54ac0f13dcd00612c6f6f2d1ff3",
     ]
 
 

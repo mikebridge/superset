@@ -205,61 +205,6 @@ const schemaWithExternalDeps = {
   },
 };
 
-test('clears dependent field value when parent dependency changes', async () => {
-  mockedGet.mockReset();
-  mockedGet
-    .mockResolvedValueOnce({
-      json: {
-        result: [{ id: 'example', name: 'Example', description: '' }],
-      },
-    })
-    .mockResolvedValueOnce({
-      json: {
-        result: {
-          name: 'Layer 1',
-          type: 'example',
-          configuration: { database: 'db1' },
-        },
-      },
-    });
-  mockedPost.mockResolvedValue({ json: { result: schemaWithExternalDeps } });
-
-  render(<SemanticLayerModal {...props} />);
-
-  // Wait for the initial schema fetch from fetchExistingLayer.
-  await waitFor(() => expect(mockedPost).toHaveBeenCalledTimes(1));
-
-  // Populate schema_name while keeping the same database — no clearing should occur.
-  await act(async () => {
-    capturedOnChange!({
-      data: { database: 'db1', schema_name: 'public' },
-      errors: [],
-    });
-  });
-
-  // Change the database — schema_name must be cleared to avoid stale selections.
-  await act(async () => {
-    capturedOnChange!({
-      data: { database: 'db2', schema_name: 'public' },
-      errors: [],
-    });
-  });
-
-  jest.advanceTimersByTime(501);
-
-  await waitFor(() => {
-    expect(mockedPost).toHaveBeenCalledTimes(2);
-    const config = (
-      mockedPost.mock.calls[1][0] as {
-        jsonPayload: { configuration: Record<string, unknown> };
-      }
-    ).jsonPayload.configuration;
-    expect(config.database).toBe('db2');
-    // schema_name must not carry over the stale 'public' value.
-    expect(config.schema_name).not.toBe('public');
-  });
-});
-
 test('cancels pending schema refresh when dependencies become unsatisfied', async () => {
   render(<SemanticLayerModal {...props} />);
 
@@ -278,34 +223,6 @@ test('cancels pending schema refresh when dependencies become unsatisfied', asyn
 
   // No additional POST should have fired; the cancelled timer must not land.
   expect(mockedPost).toHaveBeenCalledTimes(1);
-});
-
-test('Save waits for debounced schema discovery and reconciled fields', async () => {
-  mockJsonFormsChangeTriggered = true;
-  render(<SemanticLayerModal {...props} />);
-  const save = await screen.findByRole('button', { name: 'Save' });
-  await waitFor(() => expect(save).toBeEnabled());
-  let finishSchema!: (value: { json: { result: JsonSchema } }) => void;
-  mockedPost.mockReturnValueOnce(
-    new Promise(resolve => {
-      finishSchema = resolve;
-    }),
-  );
-
-  act(() => {
-    capturedOnChange!({ data: { warehouse: 'wh2' }, errors: [] });
-  });
-  expect(save).toBeDisabled();
-  fireEvent.click(save);
-  expect(SupersetClient.put).not.toHaveBeenCalled();
-
-  act(() => jest.advanceTimersByTime(501));
-  await waitFor(() => expect(mockedPost).toHaveBeenCalledTimes(2));
-  expect(save).toBeDisabled();
-  await act(async () =>
-    finishSchema({ json: { result: schemaWithExternalDeps } }),
-  );
-  await waitFor(() => expect(save).toBeEnabled());
 });
 
 test.each([

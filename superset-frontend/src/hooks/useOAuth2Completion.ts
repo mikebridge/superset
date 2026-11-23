@@ -29,15 +29,19 @@ export default function useOAuth2Completion(
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
   const retryCompletionRef = useRef<() => void>();
+  // Survives listener lifetimes, so returning to an already-handled attempt
+  // cannot rerun it from a delayed notification (as master's listener did).
+  const lastHandledTabIdRef = useRef<string>();
 
   useEffect(() => {
     if (!tabId) return undefined;
     let pending = false;
-    let handled = false;
+    let handled = lastHandledTabIdRef.current === tabId;
     const retryCompletion = () => {
       if (pending && !handled && onCompleteRef.current() !== false) {
         handled = true;
         pending = false;
+        lastHandledTabIdRef.current = tabId;
       }
     };
     retryCompletionRef.current = retryCompletion;
@@ -54,12 +58,16 @@ export default function useOAuth2Completion(
       pending = true;
       retryCompletion();
     };
-    const channel =
-      typeof BroadcastChannel !== 'undefined'
-        ? new BroadcastChannel(OAUTH_CHANNEL_NAME)
-        : null;
-    if (channel) {
-      channel.onmessage = event => handleCompletion(event.data);
+    // `BroadcastChannel` may exist on `window` but throw at construction time
+    // in restricted contexts; fall back to the storage listener if so.
+    let channel: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        channel = new BroadcastChannel(OAUTH_CHANNEL_NAME);
+        channel.onmessage = event => handleCompletion(event.data);
+      } catch {
+        channel = null;
+      }
     }
     const handleStorage = (event: StorageEvent) => {
       if (event.key !== OAUTH_STORAGE_EVENT_KEY || !event.newValue) return;
